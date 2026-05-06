@@ -27,6 +27,7 @@ func (a *Auditor) Run() Report {
 
 	// Read every file once into memory keyed by path.
 	files := map[string][]string{}
+	blockCtxs := map[string]*BlockContext{}
 	for _, f := range a.Registry.Files {
 		if !f.Exists {
 			continue
@@ -36,6 +37,7 @@ func (a *Auditor) Run() Report {
 			continue
 		}
 		files[f.Path] = lines
+		blockCtxs[f.Path] = NewBlockContext(lines)
 	}
 
 	// Run per-file checks
@@ -44,12 +46,13 @@ func (a *Auditor) Run() Report {
 			continue
 		}
 		lines := files[cf.Path]
+		bctx := blockCtxs[cf.Path]
 
 		findings = append(findings, checkBrokenPath(cf.Path, lines)...)
 		findings = append(findings, checkMisplacedPathExports(cf, lines)...)
 		findings = append(findings, checkSourceChainMismatch(cf, lines, a.Registry)...)
 		findings = append(findings, checkDuplicateCompinit(cf, lines)...)
-		findings = append(findings, checkSlowInteractiveInits(cf, lines)...)
+		findings = append(findings, checkSlowInteractiveInits(cf, lines, bctx)...)
 	}
 
 	// Cross-file checks
@@ -214,8 +217,9 @@ func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
 }
 
 // checkSlowInteractiveInits flags `eval $(slow-tool ...)` and similar patterns
-// in interactive files that aren't wrapped in a lazy-load function.
-func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string) []Finding {
+// in interactive files that aren't wrapped in a lazy-load function or otherwise
+// guarded (case branches, cache-prime ifs).
+func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string, bctx *BlockContext) []Finding {
 	if cf.Scope != placer.ScopeInteractive {
 		return nil
 	}
@@ -239,6 +243,14 @@ func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string) []Finding {
 			// If this line is inside or near a function definition that names
 			// the tool, treat it as already lazy-loaded.
 			if isLazyWrapped(lines, i, firstWord(tool)) {
+				continue
+			}
+			// Inside a `case ... esac` branch — terminal-conditional, not eager every shell.
+			if bctx != nil && bctx.InCase(i+1) {
+				continue
+			}
+			// Inside an `if [[ ! -f $cache ]]` cache-prime guard — runs once on cache miss.
+			if bctx != nil && bctx.InCachePrimeGuard(i+1) {
 				continue
 			}
 			out = append(out, Finding{
