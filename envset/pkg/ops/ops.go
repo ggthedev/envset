@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/experimentalist/envset/pkg/audit"
 	"github.com/experimentalist/envset/pkg/detector"
 	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
@@ -203,6 +204,24 @@ func Detect() error {
 		fmt.Printf("Suggested target:   %s (%s)\n", suggested.Name, suggested.Path)
 	}
 
+	return nil
+}
+
+// Audit scans every registered config file for placement / performance issues
+// and prints a human-readable report. Returns a non-nil error iff any finding
+// has severity "error".
+func Audit() error {
+	info, err := detector.Detect()
+	if err != nil {
+		return err
+	}
+	p := placer.NewPlacer(info)
+	a := audit.New(p.Registry)
+	r := a.Run()
+	audit.PrintReport(os.Stdout, r)
+	if r.CountBySeverity()[audit.SevError] > 0 {
+		return fmt.Errorf("audit found %d error-level issue(s)", r.CountBySeverity()[audit.SevError])
+	}
 	return nil
 }
 

@@ -29,8 +29,13 @@ Subcommands:
   add      Add or set an environment variable
   remove   Remove or comment out an environment variable
   list     List environment variables in a config file
+  audit    Audit shell config files for placement & performance issues
   detect   Show detected shell and configuration files
+  reload   Print source commands for one or all config files
 `,
+	// Errors from RunE are application-level, not CLI-usage problems.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
 var addCmd = &cobra.Command{
@@ -85,8 +90,26 @@ var detectCmd = &cobra.Command{
 	},
 }
 
+var auditCmd = &cobra.Command{
+	Use:   "audit",
+	Short: "Audit shell config files for placement & performance issues",
+	Long: `Scan every known shell config file (standard + custom ~/.gg_system_*) and
+report:
+  - broken syntax (e.g. PATH assignments that silently corrupt $PATH)
+  - PATH/exports placed in interactive-only files
+  - source-chain mismatches (file scope narrower than its content's intent)
+  - duplicate compinit invocations
+  - eager init of slow tools that should be lazy-loaded
+  - keys defined in multiple files (dead code)
+
+Exits non-zero if any error-level finding is reported.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return ops.Audit()
+	},
+}
+
 func init() {
-	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd)
+	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd)
 
 	// add flags
 	addCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name")
