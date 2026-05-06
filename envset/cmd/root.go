@@ -19,6 +19,10 @@ var (
 	yes         bool
 	printSource bool
 	verbose     bool
+
+	auditFix    bool
+	auditDryRun bool
+	auditYes    bool
 )
 
 var rootCmd = &cobra.Command{
@@ -112,7 +116,7 @@ report:
 
 Exits non-zero if any error-level finding is reported.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return ops.Audit()
+		return ops.Audit(auditFix, auditDryRun, auditYes)
 	},
 }
 
@@ -144,6 +148,11 @@ func init() {
 
 	// reload flags
 	reloadCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (omit for all existing files)")
+
+	// audit flags
+	auditCmd.Flags().BoolVar(&auditFix, "fix", false, "Apply safe automatic fixes (comment out broken lines)")
+	auditCmd.Flags().BoolVar(&auditDryRun, "dry-run", false, "Preview fixes without writing (use with --fix)")
+	auditCmd.Flags().BoolVar(&auditYes, "yes", false, "Apply all fixes without interactive confirmation")
 }
 
 // Execute runs the root command and finalises the audit log.

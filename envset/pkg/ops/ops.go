@@ -266,10 +266,17 @@ func Detect() error {
 }
 
 // Audit scans every registered config file for placement / performance issues
-// and prints a human-readable report. Returns a non-nil error iff any finding
-// has severity "error".
-func Audit() error {
+// and prints a human-readable report.
+//
+//   - fix=true:    also compute and display a diff preview of auto-fixes.
+//   - dryRun=true: show the diff but do not write anything (implies fix).
+//   - yes=true:    apply all fixes without an interactive confirmation prompt.
+//
+// Returns a non-nil error iff any finding has severity "error" (after fixes are
+// applied in fix mode the report is re-evaluated).
+func Audit(fix, dryRun, yes bool) error {
 	logger.Step("ops.Audit")
+	logger.Input("fix=%v dry_run=%v yes=%v", fix, dryRun, yes)
 	info, err := detector.Detect()
 	if err != nil {
 		return err
@@ -286,12 +293,85 @@ func Audit() error {
 		}
 	}
 	audit.PrintReport(os.Stdout, r)
+
+	if fix || dryRun {
+		applied, err := runAuditFix(r, dryRun, yes)
+		if err != nil {
+			return err
+		}
+		if applied {
+			// Re-evaluate after fixes so the exit code reflects the actual
+			// post-fix state of the files on disk.
+			r2 := audit.New(p.Registry).Run()
+			counts = r2.CountBySeverity()
+			logger.Decision("audit post-fix: errors=%d warnings=%d info=%d",
+				counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo])
+		}
+	}
+
 	if counts[audit.SevError] > 0 {
 		logger.Result("audit: %d error-level issue(s) — exit non-zero", counts[audit.SevError])
 		return fmt.Errorf("audit found %d error-level issue(s)", counts[audit.SevError])
 	}
 	logger.Result("audit: no error-level issues")
 	return nil
+}
+
+// runAuditFix handles the --fix sub-workflow: diff preview + optional apply.
+// Returns (true, nil) when fixes were actually written to disk.
+func runAuditFix(r audit.Report, dryRun, yes bool) (bool, error) {
+	ops, err := audit.BuildFixOps(r)
+	if err != nil {
+		return false, fmt.Errorf("building fix ops: %w", err)
+	}
+
+	audit.PrintDiff(os.Stdout, ops)
+
+	if len(ops) == 0 {
+		return false, nil
+	}
+
+	if dryRun {
+		fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
+		logger.Result("audit --fix --dry-run: %d op(s) previewed, nothing written", len(ops))
+		return false, nil
+	}
+
+	if !yes {
+		ok, promptErr := confirmPrompt(fmt.Sprintf("Apply %d fix(es)? Backups will be created as <file>.envset.bak", len(ops)))
+		if promptErr != nil || !ok {
+			fmt.Fprintln(os.Stdout, "Aborted — no changes made.")
+			logger.Result("audit --fix: user declined")
+			return false, nil
+		}
+	}
+
+	if err := audit.ApplyFixes(ops); err != nil {
+		return false, fmt.Errorf("applying fixes: %w", err)
+	}
+
+	// Report which files were modified.
+	seen := map[string]bool{}
+	for _, op := range ops {
+		if !seen[op.File] {
+			seen[op.File] = true
+			fmt.Fprintf(os.Stdout, "  fixed  %s  (backup: %s.envset.bak)\n", op.File, op.File)
+		}
+	}
+	fmt.Fprintf(os.Stdout, "\nApplied %d fix(es). Run `envset audit` to verify.\n", len(ops))
+	logger.Result("audit --fix: applied %d op(s)", len(ops))
+	return true, nil
+}
+
+// confirmPrompt prints a [y/N] prompt and returns true iff the user answers "y".
+func confirmPrompt(msg string) (bool, error) {
+	fmt.Fprintf(os.Stdout, "%s [y/N]: ", msg)
+	var resp string
+	_, err := fmt.Fscanln(os.Stdin, &resp)
+	if err != nil {
+		return false, nil // treat EOF/scan error as "no"
+	}
+	return strings.EqualFold(strings.TrimSpace(resp), "y"), nil
 }
 
 // Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.

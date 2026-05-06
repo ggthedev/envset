@@ -68,6 +68,9 @@ func checkBrokenPath(path string, lines []string) []Finding {
 	echoBug := regexp.MustCompile(`(?:export\s+)?PATH\s*=\s*"\s*echo\s+`)
 	for i, ln := range lines {
 		trim := strings.TrimSpace(ln)
+		if strings.HasPrefix(trim, "#") {
+			continue
+		}
 		if echoBug.MatchString(trim) {
 			out = append(out, Finding{
 				Severity:   SevError,
@@ -77,6 +80,7 @@ func checkBrokenPath(path string, lines []string) []Finding {
 				Title:      "Broken PATH assignment",
 				Detail:     "The literal word 'echo' is being prepended to PATH because of nested unescaped double quotes. Every shell sourcing this file silently corrupts $PATH.",
 				Suggestion: `Replace with a working form, e.g.: export PATH="$(dirname "$(which node)"):$PATH"  — or remove this line if Volta/fnm already manages node on PATH.`,
+				Fix:        &FindingFix{Edits: []FixEdit{{File: path, Line: i + 1}}},
 			})
 		}
 	}
@@ -181,6 +185,15 @@ func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
 	}
 	if len(hits) > threshold {
 		first := hits[0]
+		// Build edits for the extra compinit hits that should be commented out.
+		var compFix *FindingFix
+		if extraHits := hits[threshold:]; len(extraHits) > 0 {
+			edits := make([]FixEdit, len(extraHits))
+			for k, lineNo := range extraHits {
+				edits[k] = FixEdit{File: cf.Path, Line: lineNo}
+			}
+			compFix = &FindingFix{Edits: edits}
+		}
 		out := []Finding{{
 			Severity: SevWarn,
 			File:     cf.Path,
@@ -193,6 +206,7 @@ func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
 				ternary(hasOMZ, " (Oh My Zsh already runs compinit)", ""),
 			),
 			Suggestion: "Move any custom fpath= additions BEFORE the OMZ source line so a single compinit picks them up, then remove the trailing compinit -C call.",
+			Fix:        compFix,
 		}}
 		return out
 	}
@@ -294,14 +308,20 @@ func checkDuplicateKeysAcrossFiles(reg *placer.Registry, files map[string][]stri
 		for _, l := range uniq {
 			details = append(details, fmt.Sprintf("%s:%d", l.Path, l.Line))
 		}
+		// Build edits: comment out all but the first occurrence.
+		dupEdits := make([]FixEdit, len(uniq)-1)
+		for k, l := range uniq[1:] {
+			dupEdits[k] = FixEdit{File: l.Path, Line: l.Line}
+		}
 		out = append(out, Finding{
 			Severity:   SevInfo,
 			File:       uniq[0].Path,
 			Line:       uniq[0].Line,
-			Code:       "export " + key + "=...",
+			Code:       "export " + key + "=",
 			Title:      fmt.Sprintf("Key %q defined in multiple files", key),
 			Detail:     "Defined in: " + strings.Join(details, ", ") + ". The last-sourced one wins; the others are dead code.",
 			Suggestion: "Keep one definition (in the file matching its scope) and remove the others.",
+			Fix:        &FindingFix{Edits: dupEdits},
 		})
 	}
 	return out

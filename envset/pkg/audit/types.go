@@ -9,6 +9,19 @@ const (
 	SevInfo  Severity = "info"    // cleanup / minor optimization
 )
 
+// FixEdit is a single line-level comment-out operation.
+type FixEdit struct {
+	File string // absolute path
+	Line int    // 1-indexed
+}
+
+// FindingFix carries the machine-readable fix for a Finding.
+// All automatic fixes are comment-out operations (safe & reversible).
+// A nil Fix means no automatic fix exists for this finding.
+type FindingFix struct {
+	Edits []FixEdit
+}
+
 // Finding is a single issue detected in a config file.
 type Finding struct {
 	Severity   Severity
@@ -18,6 +31,15 @@ type Finding struct {
 	Title      string // short title
 	Detail     string // explanation of the problem
 	Suggestion string // concrete fix
+
+	// Fix carries the machine-readable automatic fix, or nil if no safe
+	// automatic fix exists. All auto-fixes comment out the offending line(s).
+	Fix *FindingFix
+}
+
+// Fixable reports whether this finding has a safe automatic fix.
+func (f Finding) Fixable() bool {
+	return f.Fix != nil && len(f.Fix.Edits) > 0
 }
 
 // Report is the output of an audit run.
