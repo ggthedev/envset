@@ -7,6 +7,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
 )
@@ -14,6 +15,8 @@ import (
 // RunAddWizard interactively prompts for add operation details.
 // Uses the placer to intelligently suggest the optimal config file.
 func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.VarType, confirmed bool, err error) {
+	logger.Step("wizard.RunAddWizard")
+
 	// 1. Key
 	keyPrompt := &survey.Input{
 		Message: "Variable name (e.g., FOO):",
@@ -22,6 +25,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	if err = survey.AskOne(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
 		return
 	}
+	logger.QA("Variable name", key)
 
 	// Secret warning
 	if detector.IsSecret(key) {
@@ -33,6 +37,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		if err = survey.AskOne(warnPrompt, &warn); err != nil {
 			return
 		}
+		logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", warn))
 		if !warn {
 			fmt.Println("Aborted.")
 			os.Exit(0)
@@ -57,6 +62,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	if err = survey.AskOne(typePrompt, &varTypeStr); err != nil {
 		return
 	}
+	logger.QA("Var type", varTypeStr)
 
 	switch {
 	case strings.HasPrefix(varTypeStr, "export"):
@@ -85,6 +91,11 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	if err = survey.AskOne(valuePrompt, &value, survey.WithValidator(survey.Required)); err != nil {
 		return
 	}
+	displayVal := value
+	if detector.IsSecret(key) {
+		displayVal = "[redacted]"
+	}
+	logger.QA("Value", displayVal)
 
 	// 4. Detect environment & build placer
 	info, detectErr := detector.Detect()
@@ -96,6 +107,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	intent := placer.DetectIntent(key, value, varType)
 
 	// 5. Analyze placements
+	logger.Trace("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
 	placements := p.Analyze(intent)
 
 	// 6. Route by confidence
@@ -105,6 +117,8 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	}
 
 	top := placements[0]
+	logger.Decision("top placement: %s confidence=%.0f%% reason=%q",
+		top.File.Name, top.Confidence*100, top.Reason)
 
 	if top.Confidence >= 0.75 {
 		// High confidence — suggest with explanation
@@ -113,19 +127,22 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 			err = qErr
 			return
 		}
+		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
 		confirmed = useIt
 		targetName = name
 	} else {
 		// Low confidence — ask clarifying questions
+		logger.Trace("top confidence below 0.75; asking clarifying questions")
 		fmt.Println("\nThe optimal location is unclear. Let me ask a few questions...")
-		intent, qErr := placer.AskUserIntent(intent)
+		refined, qErr := placer.AskUserIntent(intent)
 		if qErr != nil {
 			err = qErr
 			return
 		}
+		logger.QA("Refined intent", fmt.Sprintf("category=%s scope=%s", refined.Category, refined.Scope))
 
 		// Re-analyze with refined intent
-		placements = p.Analyze(intent)
+		placements = p.Analyze(refined)
 		if len(placements) == 0 {
 			fmt.Println("No suitable config files found after refinement.")
 			os.Exit(1)
@@ -136,6 +153,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 			err = qErr
 			return
 		}
+		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
 		confirmed = useIt
 		targetName = name
 	}
@@ -156,6 +174,8 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 
 // RunRemoveWizard interactively prompts for remove operation details.
 func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool, err error) {
+	logger.Step("wizard.RunRemoveWizard")
+
 	keyPrompt := &survey.Input{
 		Message: "Variable name to remove:",
 		Help:    "The environment variable key to remove.",
@@ -163,6 +183,7 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 	if err = survey.AskOne(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
 		return
 	}
+	logger.QA("Variable name to remove", key)
 
 	// Use placer registry to show all files including custom ones
 	info, _ := detector.Detect()
@@ -171,6 +192,7 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 	if err != nil {
 		return
 	}
+	logger.QA("Target file", targetName)
 
 	commentPrompt := &survey.Confirm{
 		Message: "Comment out instead of deleting?",
@@ -180,6 +202,7 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 	if err = survey.AskOne(commentPrompt, &commentOut); err != nil {
 		return
 	}
+	logger.QA("Comment out instead of delete?", fmt.Sprintf("%v", commentOut))
 
 	action := "delete"
 	if commentOut {
@@ -192,17 +215,20 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 	if err = survey.AskOne(confirmPrompt, &confirmed); err != nil {
 		return
 	}
+	logger.QA("Confirm "+action, fmt.Sprintf("%v", confirmed))
 
 	return
 }
 
 // RunListWizard prompts for target to list.
 func RunListWizard() (targetName string, err error) {
+	logger.Step("wizard.RunListWizard")
 	info, _ := detector.Detect()
 	p := placer.NewPlacer(info)
 	targetName, err = placer.AskTargetPick(p.Registry)
 	if err != nil {
 		return
 	}
+	logger.QA("Target file", targetName)
 	return
 }

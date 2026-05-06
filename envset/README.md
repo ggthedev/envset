@@ -97,6 +97,50 @@ alias eset='function _eset(){ eval "$(envset add "$@" --print-source)"; }; _eset
 # usage: eset --key FOO --value bar --yes
 ```
 
+### Audit & logging
+
+Run a placement / performance health-check across every detected config file:
+
+```bash
+envset audit                       # report on stdout
+envset --verbose audit             # adds per-method TRACE entries in the log
+tail -f ~/.config/envset/logs/envset.log   # watch flow live in another terminal
+```
+
+Every CLI run is recorded to an audit log. The terminal stays clean — log output
+goes only to the file. Each invocation is delimited by an 80-char rule so
+multiple runs stay easy to scan.
+
+```
+================================================================================
+RUN  2026-05-06T10:48:28+05:30  pid=48673
+cmd  envset add --key FOO --value bar
+opts verbose=false
+================================================================================
+10:48:28.594 [STEP  ] ops.Add
+10:48:28.594 [INPUT ] key="FOO" value="bar" target="" type="export" dry_run=false ...
+10:48:28.594 [STEP  ] auto-placement
+10:48:28.661 [DECIDE] placed=zshenv path=/Users/.../.zshenv confidence=85% ...
+10:48:28.661 [RESULT] add: wrote FOO to /Users/.../.zshenv
+10:48:28.661 [DONE ] elapsed=68ms
+================================================================================
+```
+
+| Verbosity | What lands in the log file | Stderr |
+|-----------|---------------------------|--------|
+| Default | inputs, wizard Q&A, placement decision, final result | nothing |
+| `-v` / `--verbose` | + per-method trace + every placement candidate | one-line `[envset] verbose log: <path>` hint at startup |
+
+**Log location** is resolved in this order (first non-empty wins):
+
+1. `$ENVSET_LOG_FILE` (full path)
+2. `$ENVSET_LOG_DIR/envset.log`
+3. `~/.config/envset/.env` containing either of the above keys
+4. `./.env` in the current working directory containing either of the above keys
+5. **Default**: `~/.config/envset/logs/envset.log`
+
+Paths beginning with `~/` or `$HOME/` are expanded.
+
 ## Variable Types
 
 | Type | Description | Example |

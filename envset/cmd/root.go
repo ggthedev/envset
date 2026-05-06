@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/ops"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +18,7 @@ var (
 	comment     bool
 	yes         bool
 	printSource bool
+	verbose     bool
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +38,12 @@ Subcommands:
 	// Errors from RunE are application-level, not CLI-usage problems.
 	SilenceUsage:  true,
 	SilenceErrors: true,
+
+	// Open the audit log before any subcommand runs.
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		logger.Init(verbose, os.Args)
+		logger.Step("command:" + cmd.Name())
+	},
 }
 
 var addCmd = &cobra.Command{
@@ -112,8 +120,11 @@ func init() {
 	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd)
 
 	// add flags
+	// Persistent flags (apply to every subcommand)
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Trace flow of control to log file and mirror to stderr")
+
 	addCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name")
-	addCmd.Flags().StringVarP(&value, "value", "v", "", "Variable value")
+	addCmd.Flags().StringVar(&value, "value", "", "Variable value")
 	addCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (e.g., zshrc, bashrc)")
 	addCmd.Flags().StringVar(&varType, "type", "export", "Variable type: export, eval, source, path_append, path_prepend, fish_set")
 	addCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview without writing")
@@ -135,10 +146,17 @@ func init() {
 	reloadCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (omit for all existing files)")
 }
 
-// Execute runs the root command.
+// Execute runs the root command and finalises the audit log.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	err := rootCmd.Execute()
+	if err != nil {
+		logger.Result("error: %v", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	} else {
+		logger.Result("ok")
+	}
+	logger.Close()
+	if err != nil {
 		os.Exit(1)
 	}
 }

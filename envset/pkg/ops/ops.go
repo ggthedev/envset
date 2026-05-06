@@ -7,6 +7,7 @@ import (
 
 	"github.com/experimentalist/envset/pkg/audit"
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
 	"github.com/experimentalist/envset/pkg/wizard"
@@ -16,6 +17,10 @@ import (
 // When printSource is true, only the `source <file>` command is written to stdout
 // (so you can `eval "$(envset add ... --print-source)"`). All other output goes to stderr.
 func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource bool) error {
+	logger.Step("ops.Add")
+	logger.Input("key=%q value=%q target=%q type=%q dry_run=%v auto_yes=%v print_source=%v",
+		key, redact(key, value), targetName, varTypeStr, dryRun, autoYes, printSource)
+
 	var varType targets.VarType
 	var err error
 
@@ -27,12 +32,14 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 
 	// If any required flag is missing, run wizard
 	if key == "" || value == "" {
+		logger.Trace("add: missing required input — entering wizard")
 		var confirmed bool
 		key, value, targetName, varType, confirmed, err = wizard.RunAddWizard(dryRun)
 		if err != nil {
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		if !confirmed {
+			logger.Result("add: aborted by user in wizard")
 			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
@@ -47,17 +54,24 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 
 		// If no target specified, use placer to auto-suggest
 		if targetName == "" {
+			logger.Step("auto-placement")
 			info, detectErr := detector.Detect()
 			if detectErr != nil {
 				return fmt.Errorf("cannot detect environment for auto-placement: %w", detectErr)
 			}
 			p := placer.NewPlacer(info)
 			intent := placer.DetectIntent(key, value, varType)
+			logger.Trace("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
 			placements := p.Analyze(intent)
 			if len(placements) == 0 {
 				return fmt.Errorf("cannot determine optimal config file for %s", key)
 			}
+			for i, pl := range placements {
+				logger.Trace("  candidate %d: %-22s confidence=%.0f%% reason=%q", i+1, pl.File.Name, pl.Confidence*100, pl.Reason)
+			}
 			top := placements[0]
+			logger.Decision("placed=%s path=%s confidence=%.0f%% update=%v reason=%q",
+				top.File.Name, top.File.Path, top.Confidence*100, top.Update, top.Reason)
 			fmt.Fprintf(infoOut, "Auto-placed: %s (%s)\n", top.File.Name, top.File.Path)
 			fmt.Fprintf(infoOut, "Reason: %s (confidence: %.0f%%)\n", top.Reason, top.Confidence*100)
 			if top.Update {
@@ -66,6 +80,7 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 			targetName = top.File.Name
 
 			if !autoYes {
+				logger.Result("auto-placement awaiting --yes confirmation; aborted")
 				fmt.Fprintln(infoOut, "Use --yes to skip this confirmation.")
 				return fmt.Errorf("auto-placement requires --yes to confirm")
 			}
@@ -83,8 +98,14 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 		fmt.Fprintf(infoOut, "Adding to %s:\n  %s\n", t.Path(), preview)
 	}
 
+	logger.Step("write")
 	if err := t.Add(key, value, varType, dryRun); err != nil {
 		return err
+	}
+	if dryRun {
+		logger.Result("add: dry-run — would write %s=%s to %s", key, redact(key, value), t.Path())
+	} else {
+		logger.Result("add: wrote %s to %s", key, t.Path())
 	}
 
 	// Post-write: emit source hint or eval-able source command
@@ -100,12 +121,17 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 
 // Remove removes (or comments out) an environment variable entry.
 func Remove(key, targetName string, comment, dryRun, printSource bool) error {
+	logger.Step("ops.Remove")
+	logger.Input("key=%q target=%q comment=%v dry_run=%v print_source=%v",
+		key, targetName, comment, dryRun, printSource)
+
 	infoOut := os.Stdout
 	if printSource {
 		infoOut = os.Stderr
 	}
 
 	if key == "" || targetName == "" {
+		logger.Trace("remove: missing input — entering wizard")
 		var confirmed bool
 		var err error
 		key, targetName, comment, confirmed, err = wizard.RunRemoveWizard()
@@ -113,6 +139,7 @@ func Remove(key, targetName string, comment, dryRun, printSource bool) error {
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		if !confirmed {
+			logger.Result("remove: aborted by user in wizard")
 			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
@@ -124,8 +151,18 @@ func Remove(key, targetName string, comment, dryRun, printSource bool) error {
 		return err
 	}
 
+	logger.Step("write")
 	if err := t.Remove(key, comment, dryRun); err != nil {
 		return err
+	}
+	action := "deleted"
+	if comment {
+		action = "commented"
+	}
+	if dryRun {
+		logger.Result("remove: dry-run — would have %s %s from %s", action, key, t.Path())
+	} else {
+		logger.Result("remove: %s %s in %s", action, key, t.Path())
 	}
 
 	if !dryRun {
@@ -140,7 +177,11 @@ func Remove(key, targetName string, comment, dryRun, printSource bool) error {
 
 // List lists entries in a target config.
 func List(key, targetName string) error {
+	logger.Step("ops.List")
+	logger.Input("key=%q target=%q", key, targetName)
+
 	if targetName == "" {
+		logger.Trace("list: target missing — entering wizard")
 		var err error
 		targetName, err = wizard.RunListWizard()
 		if err != nil {
@@ -158,6 +199,7 @@ func List(key, targetName string) error {
 	if err != nil {
 		return err
 	}
+	logger.Result("list: %d entries in %s", len(entries), t.Path())
 
 	if len(entries) == 0 {
 		fmt.Printf("No entries found in %s\n", t.Path())
@@ -182,10 +224,13 @@ func List(key, targetName string) error {
 
 // Detect prints detected environment information.
 func Detect() error {
+	logger.Step("ops.Detect")
 	info, err := detector.Detect()
 	if err != nil {
 		return err
 	}
+	logger.Trace("detector: os=%s shell=%s login_shell=%s", info.OS, info.Shell, info.LoginShell)
+	logger.Result("detect: shell=%s login_shell=%s configs=%d", info.Shell, info.LoginShell, len(info.ShellConfigs))
 
 	fmt.Printf("Detected OS:         %s\n", info.OS)
 	fmt.Printf("Current Shell:       %s (from process tree)\n", info.Shell)
@@ -211,6 +256,7 @@ func Detect() error {
 // and prints a human-readable report. Returns a non-nil error iff any finding
 // has severity "error".
 func Audit() error {
+	logger.Step("ops.Audit")
 	info, err := detector.Detect()
 	if err != nil {
 		return err
@@ -218,16 +264,29 @@ func Audit() error {
 	p := placer.NewPlacer(info)
 	a := audit.New(p.Registry)
 	r := a.Run()
-	audit.PrintReport(os.Stdout, r)
-	if r.CountBySeverity()[audit.SevError] > 0 {
-		return fmt.Errorf("audit found %d error-level issue(s)", r.CountBySeverity()[audit.SevError])
+	counts := r.CountBySeverity()
+	logger.Decision("audit: errors=%d warnings=%d info=%d",
+		counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo])
+	if logger.Verbose() {
+		for i, f := range r.Findings {
+			logger.Trace("  finding %d: [%s] %s @ %s:%d", i+1, f.Severity, f.Title, f.File, f.Line)
+		}
 	}
+	audit.PrintReport(os.Stdout, r)
+	if counts[audit.SevError] > 0 {
+		logger.Result("audit: %d error-level issue(s) — exit non-zero", counts[audit.SevError])
+		return fmt.Errorf("audit found %d error-level issue(s)", counts[audit.SevError])
+	}
+	logger.Result("audit: no error-level issues")
 	return nil
 }
 
 // Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.
 // If targetName is empty, all *existing* files in the registry are emitted in order.
 func Reload(targetName string) error {
+	logger.Step("ops.Reload")
+	logger.Input("target=%q", targetName)
+
 	info, err := detector.Detect()
 	if err != nil {
 		return err
@@ -243,14 +302,27 @@ func Reload(targetName string) error {
 			return fmt.Errorf("file %s does not exist: %s", f.Name, f.Path)
 		}
 		PrintSourceCommand(os.Stdout, f.Path)
+		logger.Result("reload: emitted source %s", f.Path)
 		return nil
 	}
 
 	// All existing files
+	count := 0
 	for _, f := range p.Registry.Files {
 		if f.Exists {
 			PrintSourceCommand(os.Stdout, f.Path)
+			count++
 		}
 	}
+	logger.Result("reload: emitted %d source line(s)", count)
 	return nil
+}
+
+// redact replaces the value with [redacted] when the key looks like a secret.
+// Avoids leaking API tokens / passwords into the audit log.
+func redact(key, value string) string {
+	if detector.IsSecret(key) {
+		return "[redacted]"
+	}
+	return value
 }
