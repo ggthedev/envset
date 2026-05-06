@@ -6,24 +6,33 @@ import (
 	"strings"
 
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
 	"github.com/experimentalist/envset/pkg/wizard"
 )
 
 // Add adds an environment variable entry.
-func Add(key, value, targetName, varTypeStr string, dryRun bool) error {
+// When printSource is true, only the `source <file>` command is written to stdout
+// (so you can `eval "$(envset add ... --print-source)"`). All other output goes to stderr.
+func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource bool) error {
 	var varType targets.VarType
 	var err error
 
+	// Route human-readable output
+	infoOut := os.Stdout
+	if printSource {
+		infoOut = os.Stderr
+	}
+
 	// If any required flag is missing, run wizard
-	if key == "" || value == "" || targetName == "" {
+	if key == "" || value == "" {
 		var confirmed bool
 		key, value, targetName, varType, confirmed, err = wizard.RunAddWizard(dryRun)
 		if err != nil {
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		if !confirmed {
-			fmt.Println("Aborted.")
+			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
 	} else {
@@ -33,6 +42,32 @@ func Add(key, value, targetName, varTypeStr string, dryRun bool) error {
 		}
 		if detector.IsSecret(key) {
 			fmt.Fprintf(os.Stderr, "WARNING: %s looks like a secret/API key.\n", key)
+		}
+
+		// If no target specified, use placer to auto-suggest
+		if targetName == "" {
+			info, detectErr := detector.Detect()
+			if detectErr != nil {
+				return fmt.Errorf("cannot detect environment for auto-placement: %w", detectErr)
+			}
+			p := placer.NewPlacer(info)
+			intent := placer.DetectIntent(key, value, varType)
+			placements := p.Analyze(intent)
+			if len(placements) == 0 {
+				return fmt.Errorf("cannot determine optimal config file for %s", key)
+			}
+			top := placements[0]
+			fmt.Fprintf(infoOut, "Auto-placed: %s (%s)\n", top.File.Name, top.File.Path)
+			fmt.Fprintf(infoOut, "Reason: %s (confidence: %.0f%%)\n", top.Reason, top.Confidence*100)
+			if top.Update {
+				fmt.Fprintln(infoOut, "Note: This key already exists — it will be updated.")
+			}
+			targetName = top.File.Name
+
+			if !autoYes {
+				fmt.Fprintln(infoOut, "Use --yes to skip this confirmation.")
+				return fmt.Errorf("auto-placement requires --yes to confirm")
+			}
 		}
 	}
 
@@ -44,14 +79,31 @@ func Add(key, value, targetName, varTypeStr string, dryRun bool) error {
 
 	if !dryRun {
 		preview, _ := t.Preview(key, value, varType)
-		fmt.Printf("Adding to %s:\n  %s\n", t.Path(), preview)
+		fmt.Fprintf(infoOut, "Adding to %s:\n  %s\n", t.Path(), preview)
 	}
 
-	return t.Add(key, value, varType, dryRun)
+	if err := t.Add(key, value, varType, dryRun); err != nil {
+		return err
+	}
+
+	// Post-write: emit source hint or eval-able source command
+	if !dryRun {
+		if printSource {
+			PrintSourceCommand(os.Stdout, t.Path())
+		} else {
+			PrintReloadHint(t.Path())
+		}
+	}
+	return nil
 }
 
 // Remove removes (or comments out) an environment variable entry.
-func Remove(key, targetName string, comment, dryRun bool) error {
+func Remove(key, targetName string, comment, dryRun, printSource bool) error {
+	infoOut := os.Stdout
+	if printSource {
+		infoOut = os.Stderr
+	}
+
 	if key == "" || targetName == "" {
 		var confirmed bool
 		var err error
@@ -60,7 +112,7 @@ func Remove(key, targetName string, comment, dryRun bool) error {
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		if !confirmed {
-			fmt.Println("Aborted.")
+			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
 	}
@@ -71,7 +123,18 @@ func Remove(key, targetName string, comment, dryRun bool) error {
 		return err
 	}
 
-	return t.Remove(key, comment, dryRun)
+	if err := t.Remove(key, comment, dryRun); err != nil {
+		return err
+	}
+
+	if !dryRun {
+		if printSource {
+			PrintSourceCommand(os.Stdout, t.Path())
+		} else {
+			PrintReloadHint(t.Path())
+		}
+	}
+	return nil
 }
 
 // List lists entries in a target config.
@@ -140,5 +203,35 @@ func Detect() error {
 		fmt.Printf("Suggested target:   %s (%s)\n", suggested.Name, suggested.Path)
 	}
 
+	return nil
+}
+
+// Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.
+// If targetName is empty, all *existing* files in the registry are emitted in order.
+func Reload(targetName string) error {
+	info, err := detector.Detect()
+	if err != nil {
+		return err
+	}
+	p := placer.NewPlacer(info)
+
+	if targetName != "" {
+		f, err := p.Registry.FindByName(targetName)
+		if err != nil {
+			return err
+		}
+		if !f.Exists {
+			return fmt.Errorf("file %s does not exist: %s", f.Name, f.Path)
+		}
+		PrintSourceCommand(os.Stdout, f.Path)
+		return nil
+	}
+
+	// All existing files
+	for _, f := range p.Registry.Files {
+		if f.Exists {
+			PrintSourceCommand(os.Stdout, f.Path)
+		}
+	}
 	return nil
 }

@@ -7,12 +7,14 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
 )
 
 // RunAddWizard interactively prompts for add operation details.
+// Uses the placer to intelligently suggest the optimal config file.
 func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.VarType, confirmed bool, err error) {
-	// Key
+	// 1. Key
 	keyPrompt := &survey.Input{
 		Message: "Variable name (e.g., FOO):",
 		Help:    "The environment variable key to set.",
@@ -37,7 +39,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		}
 	}
 
-	// Var type
+	// 2. Var type
 	varTypeStr := ""
 	varTypeOpts := []string{
 		"export (export FOO=bar)",
@@ -56,7 +58,6 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		return
 	}
 
-	// Parse var type
 	switch {
 	case strings.HasPrefix(varTypeStr, "export"):
 		varType = targets.VarTypeExport
@@ -72,7 +73,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		varType = targets.VarTypeFishSet
 	}
 
-	// Value
+	// 3. Value
 	valHelp := "The value to assign. For eval, enter the command. For source, enter the file path."
 	if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
 		valHelp = "The path to append/prepend to PATH."
@@ -85,80 +86,69 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		return
 	}
 
-	// Detect environment for target suggestion
+	// 4. Detect environment & build placer
 	info, detectErr := detector.Detect()
 	if detectErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not detect environment: %v\n", detectErr)
 	}
 
-	// Target selection
-	targetOpts := make([]string, 0, len(targets.AllShellTargets()))
-	targetDescriptions := make(map[string]string)
-	for _, t := range targets.AllShellTargets() {
-		label := t
-		path := "(not found)"
-		exists := false
-		if info != nil {
-			for _, c := range info.ShellConfigs {
-				if c.Name == t {
-					path = c.Path
-					exists = c.Exists
-					break
-				}
-			}
+	p := placer.NewPlacer(info)
+	intent := placer.DetectIntent(key, value, varType)
+
+	// 5. Analyze placements
+	placements := p.Analyze(intent)
+
+	// 6. Route by confidence
+	if len(placements) == 0 {
+		fmt.Println("No suitable config files found.")
+		os.Exit(1)
+	}
+
+	top := placements[0]
+
+	if top.Confidence >= 0.75 {
+		// High confidence — suggest with explanation
+		useIt, name, qErr := placer.AskPlacementConfirmation(top, p.Registry)
+		if qErr != nil {
+			err = qErr
+			return
 		}
-		if exists {
-			label = fmt.Sprintf("%s [exists] %s", t, path)
-		} else {
-			label = fmt.Sprintf("%s %s", t, path)
+		confirmed = useIt
+		targetName = name
+	} else {
+		// Low confidence — ask clarifying questions
+		fmt.Println("\nThe optimal location is unclear. Let me ask a few questions...")
+		intent, qErr := placer.AskUserIntent(intent)
+		if qErr != nil {
+			err = qErr
+			return
 		}
-		targetOpts = append(targetOpts, label)
-		targetDescriptions[label] = t
-	}
 
-	defaultTarget := targetOpts[0]
-	if info != nil {
-		suggested := info.SuggestConfig()
-		if suggested != nil {
-			for _, opt := range targetOpts {
-				if strings.HasPrefix(opt, suggested.Name) {
-					defaultTarget = opt
-					break
-				}
-			}
+		// Re-analyze with refined intent
+		placements = p.Analyze(intent)
+		if len(placements) == 0 {
+			fmt.Println("No suitable config files found after refinement.")
+			os.Exit(1)
 		}
+
+		useIt, name, qErr := placer.AskPlacementConfirmation(placements[0], p.Registry)
+		if qErr != nil {
+			err = qErr
+			return
+		}
+		confirmed = useIt
+		targetName = name
 	}
 
-	targetPrompt := &survey.Select{
-		Message: "Target configuration file:",
-		Options: targetOpts,
-		Default: defaultTarget,
-	}
-	var selectedLabel string
-	if err = survey.AskOne(targetPrompt, &selectedLabel); err != nil {
-		return
-	}
-	targetName = targetDescriptions[selectedLabel]
-	if targetName == "" {
-		// fallback: extract first word
-		targetName = strings.Fields(selectedLabel)[0]
-	}
-
-	// Preview
-	t, err := targets.Factory(targetName, info.HomeDir)
-	if err != nil {
-		return
-	}
-	preview, _ := t.Preview(key, value, varType)
-	fmt.Printf("\nPreview line:\n  %s\n\n", preview)
-
-	// Confirm
-	confirmPrompt := &survey.Confirm{
-		Message: fmt.Sprintf("Write to %s?", t.Path()),
-		Default: true,
-	}
-	if err = survey.AskOne(confirmPrompt, &confirmed); err != nil {
-		return
+	// 7. Preview
+	if confirmed && targetName != "" {
+		t, tErr := targets.Factory(targetName, info.HomeDir)
+		if tErr != nil {
+			err = tErr
+			return
+		}
+		preview, _ := t.Preview(key, value, varType)
+		fmt.Printf("\nPreview line:\n  %s\n\n", preview)
 	}
 
 	return
@@ -166,7 +156,6 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 
 // RunRemoveWizard interactively prompts for remove operation details.
 func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool, err error) {
-	// Key
 	keyPrompt := &survey.Input{
 		Message: "Variable name to remove:",
 		Help:    "The environment variable key to remove.",
@@ -175,24 +164,14 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 		return
 	}
 
-	// Target
+	// Use placer registry to show all files including custom ones
 	info, _ := detector.Detect()
-	targetOpts := targets.AllShellTargets()
-	defaultTarget := targetOpts[0]
-	if info != nil && info.SuggestConfig() != nil {
-		defaultTarget = info.SuggestConfig().Name
-	}
-
-	targetPrompt := &survey.Select{
-		Message: "Target configuration file:",
-		Options: targetOpts,
-		Default: defaultTarget,
-	}
-	if err = survey.AskOne(targetPrompt, &targetName); err != nil {
+	p := placer.NewPlacer(info)
+	targetName, err = placer.AskTargetPick(p.Registry)
+	if err != nil {
 		return
 	}
 
-	// Comment or delete
 	commentPrompt := &survey.Confirm{
 		Message: "Comment out instead of deleting?",
 		Default: true,
@@ -202,7 +181,6 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 		return
 	}
 
-	// Confirm
 	action := "delete"
 	if commentOut {
 		action = "comment out"
@@ -221,18 +199,9 @@ func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool,
 // RunListWizard prompts for target to list.
 func RunListWizard() (targetName string, err error) {
 	info, _ := detector.Detect()
-	targetOpts := targets.AllShellTargets()
-	defaultTarget := targetOpts[0]
-	if info != nil && info.SuggestConfig() != nil {
-		defaultTarget = info.SuggestConfig().Name
-	}
-
-	targetPrompt := &survey.Select{
-		Message: "Target configuration file to list:",
-		Options: targetOpts,
-		Default: defaultTarget,
-	}
-	if err = survey.AskOne(targetPrompt, &targetName); err != nil {
+	p := placer.NewPlacer(info)
+	targetName, err = placer.AskTargetPick(p.Registry)
+	if err != nil {
 		return
 	}
 	return
