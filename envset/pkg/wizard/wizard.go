@@ -100,7 +100,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		exists := false
 		if info != nil {
 			for _, c := range info.ShellConfigs {
-				if c.Name == t || (t == "config_fish" && c.Name == "config.fish") {
+				if c.Name == t {
 					path = c.Path
 					exists = c.Exists
 					break

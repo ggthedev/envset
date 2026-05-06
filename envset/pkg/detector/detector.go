@@ -12,7 +12,8 @@ import (
 // Info holds detected environment information.
 type Info struct {
 	OS           string
-	Shell        string
+	Shell        string // current running shell (from process tree)
+	LoginShell   string // login shell (from $SHELL)
 	HomeDir      string
 	ShellConfigs []ShellConfig
 }
@@ -33,31 +34,93 @@ func Detect() (*Info, error) {
 		return nil, fmt.Errorf("could not determine home directory: %w", err)
 	}
 
-	shell := DetectShell(home)
+	loginShell := detectLoginShell()
+	currentShell := detectCurrentShell()
+
+	// Prefer current shell for suggestions; fallback to login shell.
+	shell := currentShell
+	if shell == "" || shell == "unknown" {
+		shell = loginShell
+	}
+
 	configs := detectShellConfigs(home)
 
 	return &Info{
 		OS:           runtime.GOOS,
 		Shell:        shell,
+		LoginShell:   loginShell,
 		HomeDir:      home,
 		ShellConfigs: configs,
 	}, nil
 }
 
-// DetectShell determines the user's shell from SHELL env var.
-func DetectShell(home string) string {
+// detectLoginShell determines the login shell from $SHELL env var.
+func detectLoginShell() string {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
-		// fallback: check common shells
-		candidates := []string{"/bin/zsh", "/bin/bash", "/usr/bin/zsh", "/usr/bin/bash", "/bin/fish"}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				return filepath.Base(c)
-			}
-		}
 		return "unknown"
 	}
 	return filepath.Base(shell)
+}
+
+// detectCurrentShell walks the parent process tree to find the actual
+// shell process you're currently running in (e.g., bash launched from zsh).
+func detectCurrentShell() string {
+	knownShells := map[string]bool{
+		"zsh": true, "bash": true, "fish": true, "sh": true,
+		"csh": true, "tcsh": true, "ksh": true, "dash": true,
+	}
+
+	pid := os.Getppid()
+	visited := make(map[int]bool)
+
+	for pid > 1 && !visited[pid] {
+		visited[pid] = true
+		comm, ppid, err := getProcessInfo(pid)
+		if err != nil {
+			break
+		}
+		name := filepath.Base(strings.TrimSpace(comm))
+		if knownShells[name] {
+			return name
+		}
+		// Skip common intermediaries (e.g., go run, script, sshd, tmux, screen)
+		skip := map[string]bool{"go": true, "script": true, "sshd": true,
+			"tmux": true, "screen": true, "login": true, "sudo": true,
+			"su": true, "launchd": true, "init": true}
+		if !skip[name] && name != "" {
+			// If we hit a non-shell, non-intermediary process, stop traversing
+			// unless it's a terminal emulator (keep going).
+			termEmulators := map[string]bool{
+				" Terminal": true, "iTerm2": true, "kitty": true,
+				"alacritty": true, "warp": true, "wezterm": true,
+			}
+			if !termEmulators[name] {
+				// Could be a command run from shell; continue one more level
+			}
+		}
+		pid = ppid
+	}
+
+	return ""
+}
+
+// getProcessInfo returns the command name and parent PID for a given PID.
+// Uses ps which is available on both macOS and Linux.
+func getProcessInfo(pid int) (string, int, error) {
+	cmd := exec.Command("ps", "-o", "comm=", "-o", "ppid=", "-p", fmt.Sprintf("%d", pid))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", 0, err
+	}
+	parts := strings.Fields(string(out))
+	if len(parts) < 2 {
+		return "", 0, fmt.Errorf("unexpected ps output")
+	}
+	comm := parts[0]
+	ppid := 0
+	fmt.Sscanf(parts[1], "%d", &ppid)
+	return comm, ppid, nil
 }
 
 func detectShellConfigs(home string) []ShellConfig {
@@ -69,7 +132,7 @@ func detectShellConfigs(home string) []ShellConfig {
 		{Name: ".bash_profile", Path: filepath.Join(home, ".bash_profile"), Shell: "bash", Priority: 2},
 		{Name: ".profile", Path: filepath.Join(home, ".profile"), Shell: "bash", Priority: 3},
 		{Name: ".bash_login", Path: filepath.Join(home, ".bash_login"), Shell: "bash", Priority: 4},
-		{Name: "config.fish", Path: filepath.Join(home, ".config", "fish", "config.fish"), Shell: "fish", Priority: 1},
+		{Name: "config_fish", Path: filepath.Join(home, ".config", "fish", "config.fish"), Shell: "fish", Priority: 1},
 	}
 
 	for i := range configs {

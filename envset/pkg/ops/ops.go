@@ -123,9 +123,10 @@ func Detect() error {
 		return err
 	}
 
-	fmt.Printf("Detected OS:        %s\n", info.OS)
-	fmt.Printf("Detected Shell:     %s\n", info.Shell)
-	fmt.Printf("Home Directory:     %s\n", info.HomeDir)
+	fmt.Printf("Detected OS:         %s\n", info.OS)
+	fmt.Printf("Current Shell:       %s (from process tree)\n", info.Shell)
+	fmt.Printf("Login Shell:         %s (from $SHELL)\n", info.LoginShell)
+	fmt.Printf("Home Directory:      %s\n", info.HomeDir)
 	fmt.Println("Shell Configs:")
 	for _, c := range info.ShellConfigs {
 		status := "missing"
