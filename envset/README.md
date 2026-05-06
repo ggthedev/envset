@@ -141,6 +141,31 @@ opts verbose=false
 
 Paths beginning with `~/` or `$HOME/` are expanded.
 
+### Source-chain awareness
+
+The placer doesn't just look at a file's *declared* scope — it follows
+`source ...` directives in your config files and computes each file's
+**effective scope** (the broadest scope that actually reaches it).
+
+Concrete example: you keep cross-shell exports in `~/.gg_system_exports`,
+declared `all_sessions`. If you only `source ~/.gg_system_exports` from
+`~/.zprofile`, its **effective scope is login** — variables defined there
+won't reach scripts, cron jobs, or `(zsh -c ...)` invocations.
+
+When you run `envset add JAVA_HOME /opt/jdk`, the placer:
+
+1. Detects the intent as `category=application scope=all_sessions`.
+2. Penalises every file whose effective scope can't reach `all_sessions`
+   (`gg_system_exports` drops by 0.20 — see `[TRACE]` lines in the log).
+3. Promotes `~/.zshenv` (effective scope still `all_sessions`) to the top.
+4. **Asks you in the wizard** when a familiar custom file is broken — three
+   options: write to it anyway, write to the correct primary file, or bail
+   and run `envset audit` to fix the source-chain.
+
+Non-interactive runs (`--yes`) print a `WARNING:` to stderr if the chosen
+file has a scope mismatch or if the same key already exists in other files
+(those copies will be shadowed).
+
 ## Variable Types
 
 | Type | Description | Example |

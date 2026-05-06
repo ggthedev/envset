@@ -120,6 +120,30 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 	logger.Decision("top placement: %s confidence=%.0f%% reason=%q",
 		top.File.Name, top.Confidence*100, top.Reason)
 
+	// 6a. Source-chain check: if any *custom* file with a matching declared
+	// scope is broken (effective scope narrower than the intent), surface the
+	// scope-mismatch prompt before falling through to the normal flow. This
+	// gives the user a clear choice between their familiar custom file, the
+	// canonical primary file, or bailing out to fix the source-chain.
+	if broken := findBrokenRelevantCustom(placements, intent); broken != nil {
+		logger.Trace("scope mismatch detected: %s declared=%s effective=%s",
+			broken.File.Name, broken.File.Scope, broken.EffectiveScope)
+		if primary, ok := placer.PrimaryFileForScope(p.Registry, intent.Scope); ok {
+			name, qErr := placer.AskScopeMismatchResolution(*broken, *primary, intent.Scope)
+			if qErr != nil {
+				err = qErr
+				return
+			}
+			logger.QA("Scope-mismatch resolution",
+				fmt.Sprintf("broken=%s primary=%s chosen=%s",
+					broken.File.Name, primary.Name, name))
+			confirmed = true
+			targetName = name
+			goto preview
+		}
+		logger.Trace("no canonical primary file found for scope %s; falling through", intent.Scope)
+	}
+
 	if top.Confidence >= 0.75 {
 		// High confidence — suggest with explanation
 		useIt, name, qErr := placer.AskPlacementConfirmation(top, p.Registry)
@@ -157,6 +181,8 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		confirmed = useIt
 		targetName = name
 	}
+
+preview:
 
 	// 7. Preview
 	if confirmed && targetName != "" {
@@ -231,4 +257,27 @@ func RunListWizard() (targetName string, err error) {
 	}
 	logger.QA("Target file", targetName)
 	return
+}
+
+// findBrokenRelevantCustom scans placements for a *custom* file whose declared
+// scope satisfies the user's intent but whose effective scope (per the
+// source-chain) does not. Returns nil when no such file exists.
+//
+// This is the trigger for AskScopeMismatchResolution: it means the user has
+// a familiar destination (e.g. ~/.gg_system_exports) that *looks* correct but
+// is actually broken — silently steering them to .zshenv would be surprising.
+func findBrokenRelevantCustom(placements []placer.Placement, intent placer.Intent) *placer.Placement {
+	if intent.Scope == placer.ScopeUnknown {
+		return nil
+	}
+	for i := range placements {
+		pl := &placements[i]
+		if !pl.File.Custom || !pl.ScopeMismatch {
+			continue
+		}
+		if pl.File.Scope == intent.Scope {
+			return pl
+		}
+	}
+	return nil
 }

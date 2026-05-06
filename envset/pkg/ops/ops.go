@@ -70,12 +70,25 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 				logger.Trace("  candidate %d: %-22s confidence=%.0f%% reason=%q", i+1, pl.File.Name, pl.Confidence*100, pl.Reason)
 			}
 			top := placements[0]
-			logger.Decision("placed=%s path=%s confidence=%.0f%% update=%v reason=%q",
-				top.File.Name, top.File.Path, top.Confidence*100, top.Update, top.Reason)
+			logger.Decision("placed=%s path=%s confidence=%.0f%% update=%v scope_mismatch=%v dups=%d reason=%q",
+				top.File.Name, top.File.Path, top.Confidence*100, top.Update,
+				top.ScopeMismatch, len(top.DuplicateLocations), top.Reason)
 			fmt.Fprintf(infoOut, "Auto-placed: %s (%s)\n", top.File.Name, top.File.Path)
 			fmt.Fprintf(infoOut, "Reason: %s (confidence: %.0f%%)\n", top.Reason, top.Confidence*100)
 			if top.Update {
 				fmt.Fprintln(infoOut, "Note: This key already exists — it will be updated.")
+			}
+			if top.ScopeMismatch {
+				fmt.Fprintf(os.Stderr,
+					"WARNING: %s effective scope is %s (declared %s). Variables may not reach %s shells. Run `envset audit` for details.\n",
+					top.File.Name, top.EffectiveScope, top.File.Scope, intent.Scope)
+				logger.Trace("ops.Add: scope mismatch on top placement; warned on stderr")
+			}
+			if len(top.DuplicateLocations) > 0 {
+				fmt.Fprintf(os.Stderr,
+					"WARNING: %q is also defined in: %s — those copies will be shadowed.\n",
+					key, strings.Join(top.DuplicateLocations, ", "))
+				logger.Trace("ops.Add: duplicate locations on top placement: %v", top.DuplicateLocations)
 			}
 			targetName = top.File.Name
 

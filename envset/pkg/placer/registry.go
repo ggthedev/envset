@@ -10,21 +10,36 @@ import (
 type ConfigFile struct {
 	Name     string   // e.g., "zshrc", "gg_system_exports"
 	Path     string   // absolute path
-	Scope    Scope    // interactive, login, all_sessions
+	Scope    Scope    // interactive, login, all_sessions — declared/intended scope
 	Category Category // primary category this file accepts
 	Exists   bool
 	Custom   bool // user-defined, not a standard shell config
 	Priority int  // lower = higher priority within same scope/category
+
+	// SourcedFrom lists absolute paths of registered files that contain a
+	// `source <this>` (or `. <this>`) directive. Empty for primary files
+	// that the shell loads directly (.zshenv, .zshrc, .zprofile, etc).
+	SourcedFrom []string
+
+	// EffectiveScope is the broadest scope that ACTUALLY reaches this file
+	// in the shell-startup graph. Differs from Scope when a custom file is
+	// declared as all_sessions but is only sourced from a login-only ancestor:
+	// its declared Scope says "all_sessions" but EffectiveScope is "login".
+	//
+	// Computed by Registry.BuildSourceChain.
+	EffectiveScope Scope
 }
 
 // Registry holds all known config files for the current user.
 type Registry struct {
-	Home   string
-	Files  []ConfigFile
-	Shell  string
+	Home  string
+	Files []ConfigFile
+	Shell string
 }
 
-// NewRegistry creates a registry with standard + user custom files.
+// NewRegistry creates a registry with standard + user custom files. After
+// registration, BuildSourceChain runs so every ConfigFile carries an accurate
+// EffectiveScope reflecting the actual shell-startup graph on disk.
 func NewRegistry(home, shell string) *Registry {
 	r := &Registry{
 		Home:  home,
@@ -32,6 +47,7 @@ func NewRegistry(home, shell string) *Registry {
 	}
 	r.registerDefaults()
 	r.registerCustomFiles()
+	r.BuildSourceChain()
 	return r
 }
 

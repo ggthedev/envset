@@ -13,6 +13,22 @@ type Placement struct {
 	Confidence float64 // 0.0–1.0
 	Reason     string
 	Update     bool // true if the key already exists in this file
+
+	// EffectiveScope mirrors File.EffectiveScope at analysis time. The placer
+	// uses it to compare against the intent's requested scope.
+	EffectiveScope Scope
+
+	// ScopeMismatch is true when the file's *declared* Scope matches the
+	// intent but its *effective* scope (per the source-chain) does not. The
+	// wizard surfaces this with a clarifying question so the user can pick
+	// between the broken-but-familiar file and the primary one for the scope.
+	ScopeMismatch bool
+
+	// DuplicateLocations lists OTHER files (paths) where the same key is
+	// already defined. Empty when the key is unique. Populated for every
+	// candidate so the wizard / CLI can warn about dead duplicates regardless
+	// of which file is finally picked.
+	DuplicateLocations []string
 }
 
 // Placer analyzes an intent and produces ranked placements.
@@ -32,11 +48,29 @@ func NewPlacer(info *detector.Info) *Placer {
 }
 
 // Analyze produces ranked placement suggestions for an intent.
+//
+// Ranking signals (highest to lowest weight):
+//  1. Key already exists in a file — prefer updating in place.
+//  2. Heuristic match for the intent's category (PATH, secret, eval, etc).
+//  3. Files whose declared Scope matches intent.Scope.
+//  4. Every other file as a low-confidence fallback.
+//
+// After ranking, two cross-cutting penalties are applied to every candidate:
+//   - SCOPE-MISMATCH penalty (−0.20): file's EffectiveScope is narrower than
+//     the intent demands (e.g. ~/.gg_system_exports declared all_sessions but
+//     only sourced from .zprofile).
+//   - DUPLICATE awareness: every candidate that finds the key in OTHER files
+//     gets DuplicateLocations populated so the UI can warn even when the
+//     winning placement is an update of an existing entry.
 func (p *Placer) Analyze(intent Intent) []Placement {
 	var placements []Placement
 
 	// 1. EXISTING KEY MATCH — highest priority
 	existing := p.findExisting(intent.Key)
+	existingPaths := make([]string, 0, len(existing))
+	for _, f := range existing {
+		existingPaths = append(existingPaths, f.Path)
+	}
 	for _, f := range existing {
 		placements = append(placements, Placement{
 			File:       f,
@@ -55,7 +89,6 @@ func (p *Placer) Analyze(intent Intent) []Placement {
 	// 3. SCOPE FALLBACKS — add all files in the inferred scope
 	scopeFiles := p.Registry.ByScope(intent.Scope)
 	for _, f := range scopeFiles {
-		// Skip if already in placements
 		if p.contains(placements, f.Name) {
 			continue
 		}
@@ -89,7 +122,45 @@ func (p *Placer) Analyze(intent Intent) []Placement {
 		})
 	}
 
+	// 5. CROSS-CUTTING ADJUSTMENTS — effective-scope penalty + duplicates.
+	for i := range placements {
+		annotateForScopeAndDuplicates(&placements[i], intent, existingPaths)
+	}
+
 	return sortPlacements(placements)
+}
+
+// annotateForScopeAndDuplicates fills in EffectiveScope, ScopeMismatch, and
+// DuplicateLocations on a placement and applies a confidence penalty when the
+// file's effective scope does not satisfy the intent's required scope.
+func annotateForScopeAndDuplicates(pl *Placement, intent Intent, existingPaths []string) {
+	pl.EffectiveScope = pl.File.EffectiveScope
+
+	// Duplicates: every existing location that ISN'T this file.
+	for _, p := range existingPaths {
+		if p != pl.File.Path {
+			pl.DuplicateLocations = append(pl.DuplicateLocations, p)
+		}
+	}
+
+	// Scope mismatch only matters when the intent has a defined scope and the
+	// declared file scope satisfies it but the effective scope does not. Files
+	// whose declared scope is itself irrelevant to the intent are already
+	// scored low by the main ranking and don't need an extra penalty.
+	if intent.Scope == ScopeUnknown {
+		return
+	}
+	declaredOK := scopeBroaderOrEqual(pl.File.Scope, intent.Scope)
+	effectiveOK := scopeBroaderOrEqual(pl.File.EffectiveScope, intent.Scope)
+	if declaredOK && !effectiveOK {
+		pl.ScopeMismatch = true
+		pl.Confidence -= 0.20
+		if pl.Confidence < 0 {
+			pl.Confidence = 0
+		}
+		pl.Reason = fmt.Sprintf("%s; but only effective for %s shells (source-chain broken)",
+			pl.Reason, pl.File.EffectiveScope)
+	}
 }
 
 // Top returns the highest-confidence placement.
