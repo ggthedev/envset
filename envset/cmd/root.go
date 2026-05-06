@@ -23,6 +23,9 @@ var (
 	auditFix    bool
 	auditDryRun bool
 	auditYes    bool
+
+	lazyInitCmd string
+	lazyWrite   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -102,6 +105,25 @@ var detectCmd = &cobra.Command{
 	},
 }
 
+var lazyCmd = &cobra.Command{
+	Use:   "lazy <tool>",
+	Short: "Generate a lazy-load wrapper for a slow-init tool",
+	Long: `Generate a shell function that defers tool initialization until first use.
+This eliminates startup cost for tools like pyenv, rbenv, direnv, etc.
+
+Examples:
+  envset lazy pyenv              # print wrapper to stdout
+  envset lazy direnv --write     # append wrapper to .zshrc
+  envset lazy mytool --init-cmd "mytool setup --shell zsh"
+
+Supported tools: rbenv, pyenv, nodenv, fnm, direnv, oh-my-posh, starship,
+zoxide, atuin, mcfly, thefuck, navi, tv.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return ops.Lazy(args[0], lazyInitCmd, lazyWrite)
+	},
+}
+
 var auditCmd = &cobra.Command{
 	Use:   "audit",
 	Short: "Audit shell config files for placement & performance issues",
@@ -121,7 +143,7 @@ Exits non-zero if any error-level finding is reported.`,
 }
 
 func init() {
-	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd)
+	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd, lazyCmd)
 
 	// add flags
 	// Persistent flags (apply to every subcommand)
@@ -153,6 +175,10 @@ func init() {
 	auditCmd.Flags().BoolVar(&auditFix, "fix", false, "Apply safe automatic fixes (comment out broken lines)")
 	auditCmd.Flags().BoolVar(&auditDryRun, "dry-run", false, "Preview fixes without writing (use with --fix)")
 	auditCmd.Flags().BoolVar(&auditYes, "yes", false, "Apply all fixes without interactive confirmation")
+
+	// lazy flags
+	lazyCmd.Flags().StringVar(&lazyInitCmd, "init-cmd", "", "Custom init command (overrides built-in lookup)")
+	lazyCmd.Flags().BoolVar(&lazyWrite, "write", false, "Append the wrapper to your interactive config file")
 }
 
 // Execute runs the root command and finalises the audit log.

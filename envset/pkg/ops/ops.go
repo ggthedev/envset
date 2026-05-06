@@ -7,6 +7,7 @@ import (
 
 	"github.com/experimentalist/envset/pkg/audit"
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/lazy"
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/targets"
@@ -408,6 +409,59 @@ func Reload(targetName string) error {
 		}
 	}
 	logger.Result("reload: emitted %d source line(s)", count)
+	return nil
+}
+
+// Lazy generates a lazy-load wrapper for the given tool and writes it to stdout.
+// If write is true, the wrapper is also appended to the appropriate interactive
+// config file (.zshrc or .bashrc).
+func Lazy(toolName, initCmd string, write bool) error {
+	logger.Step("ops.Lazy")
+	logger.Input("tool=%q init_cmd=%q write=%v", toolName, initCmd, write)
+
+	info, err := detector.Detect()
+	if err != nil {
+		return err
+	}
+
+	spec, err := lazy.Resolve(toolName, info.Shell, initCmd)
+	if err != nil {
+		return err
+	}
+
+	snippet := lazy.Generate(spec)
+	fmt.Fprint(os.Stdout, snippet)
+
+	if !write {
+		logger.Result("lazy: printed snippet for %s (no write)", toolName)
+		return nil
+	}
+
+	// Write to the interactive config file.
+	p := placer.NewPlacer(info)
+	var target *placer.ConfigFile
+	for i, f := range p.Registry.Files {
+		if f.Scope == placer.ScopeInteractive && f.Exists {
+			target = &p.Registry.Files[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("no interactive config file found to write lazy wrapper")
+	}
+
+	// Append to file.
+	fh, err := os.OpenFile(target.Path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", target.Path, err)
+	}
+	defer fh.Close()
+	if _, err := fh.WriteString("\n" + snippet); err != nil {
+		return fmt.Errorf("writing to %s: %w", target.Path, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Appended lazy wrapper to %s\n", target.Path)
+	logger.Result("lazy: appended snippet for %s to %s", toolName, target.Path)
 	return nil
 }
 
