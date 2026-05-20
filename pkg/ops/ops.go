@@ -1,18 +1,25 @@
 package ops
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/experimentalist/envset/pkg/audit"
 	"github.com/experimentalist/envset/pkg/detector"
 	"github.com/experimentalist/envset/pkg/lazy"
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/placer"
+	"github.com/experimentalist/envset/pkg/rules"
 	"github.com/experimentalist/envset/pkg/targets"
 	"github.com/experimentalist/envset/pkg/wizard"
 )
+
+// envsetVersion is stamped into ideals.json's GeneratedBy field.
+// TBD: replace with -ldflags injection during release builds.
+const envsetVersion = "dev"
 
 // Add adds an environment variable entry.
 // When printSource is true, only the `source <file>` command is written to stdout
@@ -283,20 +290,31 @@ func Audit(fix, dryRun, yes bool) error {
 		return err
 	}
 	p := placer.NewPlacer(info)
+
+	// Load layered rules: ideals (built-in) + custom (user-confirmed).
+	// On first run the files are created in ~/.config/envset/.
+	ideals, custom, err := rules.LoadOrInit(envsetVersion)
+	if err != nil {
+		return fmt.Errorf("loading rules: %w", err)
+	}
+	logger.Trace("rules loaded: ideals.checks=%d custom.rules=%d", len(ideals.Checks), len(custom.Rules))
+
 	a := audit.New(p.Registry)
 	r := a.Run()
+	r.ApplyCustomRules(custom)
+
 	counts := r.CountBySeverity()
-	logger.Decision("audit: errors=%d warnings=%d info=%d",
-		counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo])
+	logger.Decision("audit: errors=%d warnings=%d info=%d acknowledged=%d",
+		counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo], countAcknowledged(r))
 	if logger.Verbose() {
 		for i, f := range r.Findings {
-			logger.Trace("  finding %d: [%s] %s @ %s:%d", i+1, f.Severity, f.Title, f.File, f.Line)
+			logger.Trace("  finding %d: [%s] %s @ %s:%d ack=%v", i+1, f.Severity, f.Title, f.File, f.Line, f.Acknowledged)
 		}
 	}
 	audit.PrintReport(os.Stdout, r)
 
 	if fix || dryRun {
-		applied, err := runAuditFix(r, dryRun, yes)
+		applied, err := runAuditFix(r, &custom, ideals, dryRun, yes)
 		if err != nil {
 			return err
 		}
@@ -304,54 +322,233 @@ func Audit(fix, dryRun, yes bool) error {
 			// Re-evaluate after fixes so the exit code reflects the actual
 			// post-fix state of the files on disk.
 			r2 := audit.New(p.Registry).Run()
+			r2.ApplyCustomRules(custom)
 			counts = r2.CountBySeverity()
 			logger.Decision("audit post-fix: errors=%d warnings=%d info=%d",
 				counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo])
 		}
 	}
 
-	if counts[audit.SevError] > 0 {
-		logger.Result("audit: %d error-level issue(s) — exit non-zero", counts[audit.SevError])
-		return fmt.Errorf("audit found %d error-level issue(s)", counts[audit.SevError])
+	// Active errors only — acknowledged ones don't fail the build.
+	activeErrors := 0
+	for _, f := range r.Findings {
+		if f.Severity == audit.SevError && !f.Acknowledged {
+			activeErrors++
+		}
+	}
+	if activeErrors > 0 {
+		logger.Result("audit: %d error-level issue(s) — exit non-zero", activeErrors)
+		return fmt.Errorf("audit found %d error-level issue(s)", activeErrors)
 	}
 	logger.Result("audit: no error-level issues")
 	return nil
 }
 
-// runAuditFix handles the --fix sub-workflow: diff preview + optional apply.
-// Returns (true, nil) when fixes were actually written to disk.
-func runAuditFix(r audit.Report, dryRun, yes bool) (bool, error) {
+func countAcknowledged(r audit.Report) int {
+	n := 0
+	for _, f := range r.Findings {
+		if f.Acknowledged {
+			n++
+		}
+	}
+	return n
+}
+
+// runAuditFix handles the --fix sub-workflow.
+//
+// Two modes:
+//
+//   - --yes (non-interactive): apply every auto-fixable finding, no prompts,
+//     no overrides created. Backwards-compatible with the original flow.
+//
+//   - default (interactive): walk every active (non-acknowledged) finding and
+//     prompt per-finding [a/s/o]: apply / skip / override. Overrides become
+//     entries in custom.json. Then apply the chosen fixes.
+//
+// Regardless of mode, custom.json is refreshed on disk: impact strings are
+// re-snapshotted from current ideals, and rules whose target file no longer
+// exists are pruned. This is the "training" loop the user described.
+func runAuditFix(r audit.Report, custom *rules.Custom, ideals rules.Ideals, dryRun, yes bool) (bool, error) {
+	// Always refresh metadata, even if user makes no choices this run.
+	if rules.RefreshImpacts(custom, ideals) {
+		logger.Trace("custom rules: impact strings refreshed from ideals")
+	}
+	if pruned := rules.PruneStale(custom); pruned > 0 {
+		logger.Trace("custom rules: pruned %d stale rule(s)", pruned)
+	}
+
+	if yes {
+		return runAuditFixYes(r, custom, dryRun)
+	}
+	return runAuditFixInteractive(r, custom, ideals, dryRun)
+}
+
+// runAuditFixYes is the non-interactive path: apply all fixable findings, no overrides.
+func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, error) {
 	ops, err := audit.BuildFixOps(r)
 	if err != nil {
 		return false, fmt.Errorf("building fix ops: %w", err)
 	}
-
 	audit.PrintDiff(os.Stdout, ops)
+
+	// Persist any rule-metadata refresh even when no fixes are applied.
+	if err := rules.SaveCustom(*custom); err != nil {
+		logger.Trace("save custom: %v", err)
+	}
 
 	if len(ops) == 0 {
 		return false, nil
 	}
-
 	if dryRun {
 		fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
 		logger.Result("audit --fix --dry-run: %d op(s) previewed, nothing written", len(ops))
 		return false, nil
 	}
-
-	if !yes {
-		ok, promptErr := confirmPrompt(fmt.Sprintf("Apply %d fix(es)? Backups will be created as <file>.envset.bak", len(ops)))
-		if promptErr != nil || !ok {
-			fmt.Fprintln(os.Stdout, "Aborted — no changes made.")
-			logger.Result("audit --fix: user declined")
-			return false, nil
-		}
-	}
-
 	if err := audit.ApplyFixes(ops); err != nil {
 		return false, fmt.Errorf("applying fixes: %w", err)
 	}
+	reportApplied(ops)
+	return true, nil
+}
 
-	// Report which files were modified.
+// runAuditFixInteractive walks each active finding and prompts.
+func runAuditFixInteractive(r audit.Report, custom *rules.Custom, ideals rules.Ideals, dryRun bool) (bool, error) {
+	reader := bufio.NewReader(os.Stdin)
+	var toApply []audit.Finding
+	addedRules := 0
+
+	// Build the working list — only non-acknowledged findings need decisions.
+	var pending []audit.Finding
+	for _, f := range r.Findings {
+		if !f.Acknowledged {
+			pending = append(pending, f)
+		}
+	}
+	if len(pending) == 0 {
+		fmt.Fprintln(os.Stdout, "Nothing to review.")
+		if err := rules.SaveCustom(*custom); err != nil {
+			logger.Trace("save custom: %v", err)
+		}
+		return false, nil
+	}
+
+	fmt.Fprintf(os.Stdout, "\nInteractive review — %d finding(s).\n", len(pending))
+	fmt.Fprintln(os.Stdout, "Per finding: [a]pply auto-fix / [s]kip / [o]verride (acknowledge as user-confirmed) / [q]uit")
+
+reviewLoop:
+	for i, f := range pending {
+		fmt.Fprintf(os.Stdout, "\n--- [%d/%d] %s\n", i+1, len(pending), f.Title)
+		if f.Line > 0 {
+			fmt.Fprintf(os.Stdout, "    %s:%d\n", f.File, f.Line)
+		}
+		if f.Code != "" {
+			fmt.Fprintf(os.Stdout, "    > %s\n", f.Code)
+		}
+		if f.ApproxImpact != "" {
+			fmt.Fprintf(os.Stdout, "    approx impact: %s\n", f.ApproxImpact)
+		}
+
+		opts := "[s]kip / [o]verride / [q]uit"
+		if f.Fixable() {
+			opts = "[a]pply / " + opts
+		}
+		choice := promptChoice(reader, opts, f.Fixable())
+		switch choice {
+		case "a":
+			toApply = append(toApply, f)
+		case "s":
+			// no-op for this run
+		case "o":
+			rule := buildCustomRule(reader, f, ideals)
+			custom.Rules = append(custom.Rules, rule)
+			addedRules++
+			fmt.Fprintf(os.Stdout, "    recorded user-confirmed exception for %s.\n", f.CheckID)
+		case "q":
+			fmt.Fprintln(os.Stdout, "Aborted review.")
+			break reviewLoop
+		}
+	}
+
+	// Persist custom.json regardless (refresh + any new rules).
+	if err := rules.SaveCustom(*custom); err != nil {
+		return false, fmt.Errorf("saving custom rules: %w", err)
+	}
+	if addedRules > 0 {
+		fmt.Fprintf(os.Stdout, "\nRecorded %d new user-confirmed exception(s) in custom.json.\n", addedRules)
+	}
+
+	// Apply selected fixes.
+	if len(toApply) == 0 {
+		return false, nil
+	}
+	subset := audit.Report{Findings: toApply}
+	ops, err := audit.BuildFixOps(subset)
+	if err != nil {
+		return false, fmt.Errorf("building fix ops: %w", err)
+	}
+	audit.PrintDiff(os.Stdout, ops)
+	if dryRun || len(ops) == 0 {
+		if dryRun {
+			fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
+		}
+		return false, nil
+	}
+	if err := audit.ApplyFixes(ops); err != nil {
+		return false, fmt.Errorf("applying fixes: %w", err)
+	}
+	reportApplied(ops)
+	return true, nil
+}
+
+// promptChoice loops until a valid single-letter choice is given.
+// allowApply controls whether 'a' is accepted.
+func promptChoice(r *bufio.Reader, opts string, allowApply bool) string {
+	for {
+		fmt.Fprintf(os.Stdout, "    choice %s: ", opts)
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return "q"
+		}
+		c := strings.ToLower(strings.TrimSpace(line))
+		switch c {
+		case "a":
+			if allowApply {
+				return "a"
+			}
+		case "s", "o", "q":
+			return c
+		}
+		fmt.Fprintln(os.Stdout, "    invalid choice; try again")
+	}
+}
+
+// buildCustomRule prompts for the optional reason and constructs a CustomRule
+// from the finding. Subject is preferred; LineHash is recorded as fallback.
+func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rules.CustomRule {
+	fmt.Fprint(os.Stdout, "    reason (optional, press Enter to skip): ")
+	reasonLine, _ := r.ReadString('\n')
+	reason := strings.TrimSpace(reasonLine)
+
+	impact := f.ApproxImpact
+	if check := ideals.FindCheck(f.CheckID); check != nil {
+		impact = check.ApproxImpact
+	}
+
+	return rules.CustomRule{
+		CheckID: f.CheckID,
+		Match: rules.Match{
+			File:     f.File,
+			Subject:  f.Subject,
+			LineHash: rules.LineHash(f.Code),
+		},
+		Action:       rules.ActionAcknowledge,
+		Reason:       reason,
+		ApproxImpact: impact,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func reportApplied(ops []audit.FixOp) {
 	seen := map[string]bool{}
 	for _, op := range ops {
 		if !seen[op.File] {
@@ -361,18 +558,6 @@ func runAuditFix(r audit.Report, dryRun, yes bool) (bool, error) {
 	}
 	fmt.Fprintf(os.Stdout, "\nApplied %d fix(es). Run `envset audit` to verify.\n", len(ops))
 	logger.Result("audit --fix: applied %d op(s)", len(ops))
-	return true, nil
-}
-
-// confirmPrompt prints a [y/N] prompt and returns true iff the user answers "y".
-func confirmPrompt(msg string) (bool, error) {
-	fmt.Fprintf(os.Stdout, "%s [y/N]: ", msg)
-	var resp string
-	_, err := fmt.Fscanln(os.Stdin, &resp)
-	if err != nil {
-		return false, nil // treat EOF/scan error as "no"
-	}
-	return strings.EqualFold(strings.TrimSpace(resp), "y"), nil
 }
 
 // Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.
@@ -388,15 +573,26 @@ func Reload(targetName string) error {
 	p := placer.NewPlacer(info)
 
 	if targetName != "" {
+		var path string
 		f, err := p.Registry.FindByName(targetName)
-		if err != nil {
-			return err
+		if err == nil {
+			if !f.Exists {
+				return fmt.Errorf("file %s does not exist: %s", f.Name, f.Path)
+			}
+			path = f.Path
+		} else {
+			// Fallback to targets.Factory
+			t, err := targets.Factory(targetName, info.HomeDir)
+			if err != nil {
+				return fmt.Errorf("no registered file or target named %q", targetName)
+			}
+			if !t.Exists() {
+				return fmt.Errorf("file %s does not exist: %s", t.Name(), t.Path())
+			}
+			path = t.Path()
 		}
-		if !f.Exists {
-			return fmt.Errorf("file %s does not exist: %s", f.Name, f.Path)
-		}
-		PrintSourceCommand(os.Stdout, f.Path)
-		logger.Result("reload: emitted source %s", f.Path)
+		PrintSourceCommand(os.Stdout, path)
+		logger.Result("reload: emitted source %s", path)
 		return nil
 	}
 

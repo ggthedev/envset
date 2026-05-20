@@ -16,6 +16,7 @@ func AskScope() (Scope, error) {
 			"Interactive shells only (terminals I open)",
 			"Login shells (ssh, tmux new sessions)",
 			"All sessions (scripts, cron, background processes too)",
+			"Session-wide (all CLI shells + GUI apps like VSCode)",
 		},
 		Default: "All sessions (scripts, cron, background processes too)",
 		Help:    "This determines which config file the entry goes into.",
@@ -31,6 +32,8 @@ func AskScope() (Scope, error) {
 		return ScopeLogin, nil
 	case containsStr(choice, "All"):
 		return ScopeAllSessions, nil
+	case containsStr(choice, "Session-wide"):
+		return ScopeSession, nil
 	}
 	return ScopeUnknown, nil
 }

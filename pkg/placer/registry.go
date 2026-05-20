@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // ConfigFile describes a known configuration file in the registry.
@@ -67,6 +68,16 @@ func (r *Registry) registerDefaults() {
 	// fish
 	if r.Shell == "fish" || r.Shell == "" {
 		r.add(ConfigFile{Name: "config_fish", Path: filepath.Join(r.Home, ".config", "fish", "config.fish"), Scope: ScopeInteractive, Category: CatGeneric, Priority: 1})
+	}
+	// launchd (macOS only)
+	if runtime.GOOS == "darwin" {
+		r.add(ConfigFile{
+			Name:     "launchd",
+			Path:     filepath.Join(r.Home, ".config", "envset", "launchd.sh"),
+			Scope:    ScopeSession,
+			Category: CatGeneric,
+			Priority: 1,
+		})
 	}
 }
 

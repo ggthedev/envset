@@ -13,6 +13,7 @@ const (
 	ScopeInteractive Scope = "interactive"  // .zshrc, ~/.gg_system_interactive
 	ScopeLogin       Scope = "login"        // .zprofile
 	ScopeAllSessions Scope = "all_sessions" // .zshenv, ~/.gg_system_exports
+	ScopeSession     Scope = "session"      // launchd, systemd-env (session-wide / GUI)
 	ScopeUnknown     Scope = "unknown"
 )
 

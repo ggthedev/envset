@@ -35,6 +35,17 @@ type Finding struct {
 	// Fix carries the machine-readable automatic fix, or nil if no safe
 	// automatic fix exists. All auto-fixes comment out the offending line(s).
 	Fix *FindingFix
+
+	// Rule-system fields. Set by each check; consumed by the rules package
+	// to match against user-confirmed exceptions in custom.json.
+	CheckID      string // stable id, e.g. "misplaced-path-export"
+	Subject      string // hybrid match key — tool name, env var, key, etc. Empty if file-level.
+	ApproxImpact string // human-readable impact, e.g. "approx +5–50ms shell startup"
+
+	// Acknowledged is set true after applying user-confirmed custom rules.
+	// Acknowledged findings are still rendered, but in a separate section.
+	Acknowledged   bool
+	OverrideReason string // free-text reason captured at override time
 }
 
 // Fixable reports whether this finding has a safe automatic fix.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/experimentalist/envset/pkg/placer"
+	"github.com/experimentalist/envset/pkg/rules"
 )
 
 // Auditor runs a series of checks against a registry of config files.
@@ -61,6 +62,23 @@ func (a *Auditor) Run() Report {
 	return Report{Findings: findings}
 }
 
+// ApplyCustomRules consults the user's custom-rules file and tags any matching
+// finding as Acknowledged (rendered separately in reports). Findings without a
+// matching rule pass through unchanged.
+//
+// Matching uses the hybrid scheme implemented in pkg/rules.FindMatching:
+// subject token match preferred, line-content hash as fallback.
+func (r *Report) ApplyCustomRules(custom rules.Custom) {
+	for i := range r.Findings {
+		f := &r.Findings[i]
+		hash := rules.LineHash(f.Code)
+		if rule := rules.FindMatching(custom, f.CheckID, f.File, f.Subject, hash); rule != nil && rule.Action == rules.ActionAcknowledge {
+			f.Acknowledged = true
+			f.OverrideReason = rule.Reason
+		}
+	}
+}
+
 // ---------- Individual checks ----------
 
 // checkBrokenPath flags PATH= assignments that nest unquoted echo or have
@@ -76,14 +94,16 @@ func checkBrokenPath(path string, lines []string) []Finding {
 		}
 		if echoBug.MatchString(trim) {
 			out = append(out, Finding{
-				Severity:   SevError,
-				File:       path,
-				Line:       i + 1,
-				Code:       trim,
-				Title:      "Broken PATH assignment",
-				Detail:     "The literal word 'echo' is being prepended to PATH because of nested unescaped double quotes. Every shell sourcing this file silently corrupts $PATH.",
-				Suggestion: `Replace with a working form, e.g.: export PATH="$(dirname "$(which node)"):$PATH"  — or remove this line if Volta/fnm already manages node on PATH.`,
-				Fix:        &FindingFix{Edits: []FixEdit{{File: path, Line: i + 1}}},
+				Severity:     SevError,
+				File:         path,
+				Line:         i + 1,
+				Code:         trim,
+				Title:        "Broken PATH assignment",
+				Detail:       "The literal word 'echo' is being prepended to PATH because of nested unescaped double quotes. Every shell sourcing this file silently corrupts $PATH.",
+				Suggestion:   `Replace with a working form, e.g.: export PATH="$(dirname "$(which node)"):$PATH"  — or remove this line if Volta/fnm already manages node on PATH.`,
+				Fix:          &FindingFix{Edits: []FixEdit{{File: path, Line: i + 1}}},
+				CheckID:      rules.CheckBrokenPath,
+				ApproxImpact: "PATH corrupted on every shell start",
 			})
 		}
 	}
@@ -97,6 +117,7 @@ func checkMisplacedPathExports(cf placer.ConfigFile, lines []string) []Finding {
 	}
 	var out []Finding
 	pathMutate := regexp.MustCompile(`(?:export\s+)?PATH\s*=\s*"[^"]*\$PATH[^"]*"`)
+	subjectRe := regexp.MustCompile(`PATH\s*=\s*"([^":]+):\$PATH"`)
 	for i, ln := range lines {
 		trim := strings.TrimSpace(ln)
 		// Skip commented lines
@@ -104,14 +125,21 @@ func checkMisplacedPathExports(cf placer.ConfigFile, lines []string) []Finding {
 			continue
 		}
 		if pathMutate.MatchString(trim) {
+			subject := ""
+			if m := subjectRe.FindStringSubmatch(trim); m != nil {
+				subject = m[1]
+			}
 			out = append(out, Finding{
-				Severity:   SevWarn,
-				File:       cf.Path,
-				Line:       i + 1,
-				Code:       trim,
-				Title:      "PATH export in interactive-only file",
-				Detail:     fmt.Sprintf("This PATH modification only affects interactive shells. Scripts, cron jobs, and GUI app shell-outs run from %s won't see it.", cf.Name),
-				Suggestion: "Move to ~/.zshenv (or to ~/.gg_system_exports once that file is sourced from .zshenv).",
+				Severity:     SevWarn,
+				File:         cf.Path,
+				Line:         i + 1,
+				Code:         trim,
+				Title:        "PATH export in interactive-only file",
+				Detail:       fmt.Sprintf("This PATH modification only affects interactive shells. Scripts, cron jobs, and GUI app shell-outs run from %s won't see it.", cf.Name),
+				Suggestion:   "Move to ~/.zshenv (or to ~/.gg_system_exports once that file is sourced from .zshenv).",
+				CheckID:      rules.CheckMisplacedPathExport,
+				Subject:      subject,
+				ApproxImpact: "PATH invisible to scripts, cron, GUI subshells",
 			})
 		}
 	}
@@ -150,7 +178,10 @@ func checkSourceChainMismatch(cf placer.ConfigFile, lines []string, reg *placer.
 						"%s is meant for %s scope, but it is sourced from %s which is %s scope. Variables in %s won't reach non-%s shells.",
 						f.Name, f.Scope, cf.Name, cf.Scope, f.Name, cf.Scope,
 					),
-					Suggestion: fmt.Sprintf("Move `source %s` from %s into ~/.zshenv so its variables reach every shell.", m[1], cf.Name),
+					Suggestion:   fmt.Sprintf("Move `source %s` from %s into ~/.zshenv so its variables reach every shell.", m[1], cf.Name),
+					CheckID:      rules.CheckSourceChainMismatch,
+					Subject:      f.Name,
+					ApproxImpact: "Variables don't reach all intended shells",
 				})
 			}
 		}
@@ -208,8 +239,10 @@ func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
 				len(hits), hits,
 				ternary(hasOMZ, " (Oh My Zsh already runs compinit)", ""),
 			),
-			Suggestion: "Move any custom fpath= additions BEFORE the OMZ source line so a single compinit picks them up, then remove the trailing compinit -C call.",
-			Fix:        compFix,
+			Suggestion:   "Move any custom fpath= additions BEFORE the OMZ source line so a single compinit picks them up, then remove the trailing compinit -C call.",
+			Fix:          compFix,
+			CheckID:      rules.CheckDuplicateCompinit,
+			ApproxImpact: "approx +10–30ms shell startup",
 		}}
 		return out
 	}
@@ -263,7 +296,10 @@ func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string, bctx *Block
 					"%s runs every interactive shell launch and adds 5–50ms to startup. If you don't use %s in every shell, lazy-load it.",
 					firstWord(tool), firstWord(tool),
 				),
-				Suggestion: fmt.Sprintf("Wrap with a lazy-load function (see rbenv/pyenv pattern in your .zshrc) or run `envset lazy %s`.", firstWord(tool)),
+				Suggestion:   fmt.Sprintf("Wrap with a lazy-load function (see rbenv/pyenv pattern in your .zshrc) or run `envset lazy %s`.", firstWord(tool)),
+				CheckID:      rules.CheckSlowInteractiveInit,
+				Subject:      firstWord(tool),
+				ApproxImpact: "approx +5–50ms shell startup",
 			})
 			break
 		}
@@ -326,14 +362,17 @@ func checkDuplicateKeysAcrossFiles(reg *placer.Registry, files map[string][]stri
 			dupEdits[k] = FixEdit{File: l.Path, Line: l.Line}
 		}
 		out = append(out, Finding{
-			Severity:   SevInfo,
-			File:       uniq[0].Path,
-			Line:       uniq[0].Line,
-			Code:       "export " + key + "=",
-			Title:      fmt.Sprintf("Key %q defined in multiple files", key),
-			Detail:     "Defined in: " + strings.Join(details, ", ") + ". The last-sourced one wins; the others are dead code.",
-			Suggestion: "Keep one definition (in the file matching its scope) and remove the others.",
-			Fix:        &FindingFix{Edits: dupEdits},
+			Severity:     SevInfo,
+			File:         uniq[0].Path,
+			Line:         uniq[0].Line,
+			Code:         "export " + key + "=",
+			Title:        fmt.Sprintf("Key %q defined in multiple files", key),
+			Detail:       "Defined in: " + strings.Join(details, ", ") + ". The last-sourced one wins; the others are dead code.",
+			Suggestion:   "Keep one definition (in the file matching its scope) and remove the others.",
+			Fix:          &FindingFix{Edits: dupEdits},
+			CheckID:      rules.CheckDuplicateKeys,
+			Subject:      key,
+			ApproxImpact: "Dead code; last-sourced definition wins",
 		})
 	}
 	return out

@@ -46,6 +46,12 @@ func NewShellTarget(name, home string) (*ShellTarget, error) {
 	case "config_fish":
 		path = filepath.Join(home, ".config", "fish", "config.fish")
 		shell = "fish"
+	case "gg_system_exports":
+		path = filepath.Join(home, ".gg_system_exports")
+		shell = "zsh"
+	case "gg_system_interactive":
+		path = filepath.Join(home, ".gg_system_interactive")
+		shell = "zsh"
 	default:
 		return nil, fmt.Errorf("unsupported shell target: %s", name)
 	}

@@ -2,6 +2,9 @@ package targets
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // VarType represents how a variable should be set.
@@ -45,10 +48,33 @@ type Target interface {
 // Factory returns a Target by name.
 func Factory(name string, home string) (Target, error) {
 	switch name {
-	case "zshrc", "bashrc", "bash_profile", "zprofile", "profile", "zshenv", "bash_login", "config_fish":
+	case "zshrc", "bashrc", "bash_profile", "zprofile", "profile", "zshenv", "bash_login", "config_fish", "gg_system_exports", "gg_system_interactive":
 		return NewShellTarget(name, home)
+	case "launchd":
+		return NewLaunchdTarget(home)
 	default:
-		// TBD/FUTURE: dotenv, launchd, vscode, etc.
+		// Try custom path resolution if it looks like a path
+		if strings.Contains(name, "/") || strings.Contains(name, ".") || strings.Contains(name, "\\") {
+			path := name
+			if strings.HasPrefix(path, "~/") {
+				path = filepath.Join(home, path[2:])
+			} else if strings.HasPrefix(path, "$HOME/") {
+				path = filepath.Join(home, path[5:])
+			}
+			shell := "zsh"
+			if strings.HasSuffix(path, "config.fish") || strings.HasSuffix(path, ".fish") {
+				shell = "fish"
+			}
+			_, err := os.Stat(path)
+			exists := err == nil
+			return &ShellTarget{
+				name:   filepath.Base(path),
+				path:   path,
+				shell:  shell,
+				exists: exists,
+			}, nil
+		}
+		// TBD/FUTURE: dotenv, launchd, IDE configs not yet implemented
 		return nil, fmt.Errorf("unknown target %q (TBD: dotenv, launchd, IDE configs not yet implemented)", name)
 	}
 }
