@@ -1,210 +1,266 @@
 # envset
 
-Interactive environment variable setter for shell configuration files.
+Safely add, list and remove environment variables in your shell startup files
+(`.zshenv`, `.zshrc`, `.zprofile`, `.bashrc`, `.bash_profile`, `.profile`,
+`config.fish`, and macOS `launchd`) without hand-editing them.
 
-## Overview
+New here? Start with the **[tutorial](docs/TUTORIAL.md)**: it takes about 10 minutes
+and uses a throwaway home directory, so nothing on your machine changes.
 
-`envset` helps you add, list, and remove environment variables from your shell configuration files (`.zshrc`, `.bashrc`, `.bash_profile`, `.zprofile`, `.profile`, `.zshenv`, `config.fish`).
+## Why use it instead of `echo >> ~/.zshrc`
 
-It detects your current shell from the process tree (not just `$SHELL`), suggests the right config file, and warns you before writing secrets.
-
-## Features
-
-- **Smart placement**: Automatically figures out the best config file based on variable semantics (PATH → `.zshenv`, `EDITOR` → `.zshrc`, etc.)
-- **Custom file support**: Recognizes your `~/.gg_system_exports` and `~/.gg_system_interactive` files
-- **Both modes**: Use flags for quick scripting or run without flags for an interactive wizard
-- **Smart detection**: Detects your current running shell via parent process tree, not just login shell
-- **Dry-run**: Preview changes before writing (`--dry-run`)
-- **Secret warnings**: Warns when you're about to write variables that look like API keys or passwords
-- **Comment or delete**: Remove can comment out lines instead of deleting them (`--comment`)
-- **Multiple variable types**: `export`, `eval`, `source`, `path_append`, `path_prepend`, `fish_set`
+- **It picks the right file.** `PATH` and `JAVA_HOME` go in `.zshenv` so scripts
+  and cron see them; `EDITOR` and aliases go in `.zshrc`. It also follows your
+  `source` chains and warns when a file never gets loaded.
+- **It never corrupts your config.**
+  - Writes are atomic: a temp file is written first, then swapped in.
+  - Every write is preceded by a backup.
+  - envset refuses any change that would stop the file parsing (checked with `zsh -n`, `bash -n` or `fish --no-execute`).
+  - Symlinks into a dotfiles repo stay symlinks, and file permissions are kept.
+- **It's safe to re-run.**
+  - Adding an identical line does nothing.
+  - Adding the same key with a new value updates that line in place.
+  - Removing a line leaves the rest of the file byte-for-byte identical.
+- **It blocks injection.**
+  - Variable names are validated.
+  - Command substitution (`$(...)` or backticks) in a value is rejected unless you explicitly pass `--raw`.
+- **Undo is one command:** `envset restore --target zshrc`.
 
 ## Installation
 
+Requires Go 1.22 or newer (`brew install go`). Works on Apple Silicon and Intel Macs.
+
 ```bash
-cd /path/to/envset
-go build -o envset .
-cp envset ~/bin/  # or anywhere in your $PATH
+git clone <your-remote>/envset.git && cd envset
+go install .                      # installs to $(go env GOPATH)/bin, usually ~/go/bin
+envset --help
 ```
 
-## Usage
-
-### Detect your environment
+Make sure `~/go/bin` is on your `PATH`, which envset can do for you:
 
 ```bash
-envset detect
+~/go/bin/envset add --type path_append --value '~/go/bin' --target zshenv
 ```
 
-### Add a variable (wizard mode)
+Once the repo is pushed to GitHub you can install or upgrade on any Mac with:
 
 ```bash
-envset add
+go install github.com/experimentalist/envset@latest
+# for a private repo, first:  go env -w GOPRIVATE=github.com/experimentalist/*
 ```
 
-### Add a variable (auto-placement, flags mode)
+## Quick reference
 
 ```bash
-# Let envset figure out the best file (requires --yes)
-envset add --key JAVA_HOME --value /opt/java --type export --yes
-envset add --key PATH --value /usr/local/bin --type path_append --yes --dry-run
-
-# Explicit target (old behavior)
-envset add --key FOO --value bar --target zshrc --type export
-envset add --key FOO --value bar --target zshrc --type export --dry-run
+envset detect                                        # which shell / files envset sees
+envset add --key JAVA_HOME --value /opt/jdk --yes    # auto-pick the file
+envset add --key EDITOR --value nvim --target zshrc  # explicit file
+envset add --type path_append --value /opt/homebrew/bin --target zshenv
+envset list --target zshenv [--key JAVA_HOME]
+envset remove --key EDITOR --target zshrc            # comments the line out
+envset remove --key EDITOR --target zshrc --comment=false   # deletes it
+envset remove --key PATH --value /opt/homebrew/bin --target zshenv
+envset restore --target zshenv --list                # show backups
+envset restore --target zshenv                       # undo the last change
+envset audit                                         # health check, read-only
+envset audit --fix                                   # review and apply safe fixes
+envset lazy pyenv --write                            # lazy-load a slow tool
+eval "$(envset reload --target zshenv)"              # apply in the current shell
 ```
 
-### List variables
+Run `envset add` or `envset remove` with no flags to start an interactive wizard.
+
+## Commands
+
+### `add`
+
+| Flag | Meaning |
+|---|---|
+| `-k, --key` | Variable name (`[A-Za-z_][A-Za-z0-9_]*`). Not needed for `path_*` types |
+| `--value` | Value (see [Value encoding](#value-encoding)) |
+| `-t, --target` | File: `zshenv`, `zshrc`, `zprofile`, `bashrc`, `bash_profile`, `profile`, `bash_login`, `config_fish`, `gg_system_exports`, `gg_system_interactive`, `launchd`, or a path such as `~/.my_exports` |
+| `--type` | `export` (default), `export_and_path_append`, `path_append`, `path_prepend`, `eval`, `source`, `fish_set` |
+| `--yes` | Accept the auto-placed file when `--target` is omitted (required for non-interactive auto-placement) |
+| `--literal` / `--raw` | Change value encoding |
+| `--dry-run` | Show exactly what would change; write nothing |
+| `--print-source` | Print only `source <file>` on stdout, so `eval "$(envset add … --print-source)"` applies it immediately |
+
+What `add` does depends on what's already in the file:
+
+| Already in the file | Result |
+|---|---|
+| Nothing for this key | The line is appended |
+| An identical line | `No change` (nothing is written) |
+| The key with a different value | That line is updated in place, and envset shows the old and new versions |
+
+For PATH types, envset only checks whether the exact entry is already there. It never replaces your existing PATH lines.
+
+### `remove`
+
+Comments the matching line(s) out by default (`# export FOO=…`). Pass
+`--comment=false` to delete them instead.
+
+- **PATH:** removing it requires `--value <dir>`, so one entry can be removed without wiping the others. A bare `remove --key PATH` is refused.
+- **`export_and_path_append` keys:** removing the key also removes its `export PATH="$PATH:$KEY"` companion line.
+- **Already-commented lines:** commenting them again does nothing.
+
+### `restore`
+
+envset keeps the last 10 backups of each file in
+`~/.config/envset/backups/` (mode 0600). Each backup is named after the file
+and a timestamp, e.g. `home__.zshrc.20261126T230923.088904000`.
 
 ```bash
-envset list --target zshrc
-envset list --target zshrc --key FOO
+envset restore --target zshrc --list           # newest first
+envset restore --target zshrc                  # restore the most recent backup
+envset restore --target zshrc --backup <file>  # restore a specific one
+envset restore --target zshrc --dry-run
 ```
 
-### Remove a variable
+Before restoring, envset saves the current contents as a backup marked
+*pre-restore*. A plain `envset restore` skips that copy, so to undo a restore,
+pick the pre-restore backup with `--backup`.
+
+### `audit`
+
+`envset audit` scans every known config file and reports:
+- PATH assignments that corrupt `$PATH`
+- exports placed in interactive-only files
+- `source` chains that never load a file
+- duplicate `compinit` calls
+- slow tool inits (pyenv, nvm, …)
+- keys defined in more than one file
+
+It exits non-zero if it finds errors.
+
+`--fix` shows a diff of the safe fixes (each one comments out a line) and asks
+before applying them; `--fix --yes` applies them without asking. If a file
+changed since the audit ran, nothing is written. Every fixed file is backed up first.
+
+### `lazy`
+
+Prints, or with `--write` appends once, a wrapper function that delays a slow
+tool's `init` until you first run it:
 
 ```bash
-# Comment out (default)
-envset remove --key FOO --target zshrc
-
-# Actually delete
-envset remove --key FOO --target zshrc --comment=false
-
-# Dry-run
-envset remove --key FOO --target zshrc --dry-run
+envset lazy pyenv          # print
+envset lazy pyenv --write  # add to your interactive rc file (no duplicates)
+envset lazy mytool --init-cmd "mytool init zsh"
 ```
 
-### Apply changes immediately (sourcing)
+### `detect`, `list`, `reload`
 
-A child process **cannot** modify its parent shell's environment, so `envset` writes the line to disk but you must `source` the file in your current shell to load it. There are three ways:
-
-```bash
-# 1. Manual — envset prints a hint after every successful write:
-#    "To apply changes in your current shell, run: source ~/.zshenv"
-source ~/.zshenv
-
-# 2. eval-able one-liner with --print-source on add/remove:
-eval "$(envset add --key JAVA_HOME --value /opt/java --yes --print-source)"
-
-# 3. Standalone reload subcommand:
-eval "$(envset reload --target zshenv)"     # one file
-eval "$(envset reload)"                      # all existing files
-```
-
-For convenience add this alias to your `~/.zshrc` / `~/.bashrc`:
+- `detect` shows the OS, the current and login shells, and which config files exist.
+- `list --target X [--key K]` shows the entries in a file, including commented-out ones.
+- `reload [--target X]` prints `source` lines for `eval`. A child process can't change its parent shell's environment, so this is how you apply a change to the shell you're in:
 
 ```bash
+eval "$(envset reload --target zshenv)"
+# or put this alias in ~/.zshrc:
 alias eset='function _eset(){ eval "$(envset add "$@" --print-source)"; }; _eset'
-# usage: eset --key FOO --value bar --yes
 ```
 
-### Audit & logging
+## Value encoding
 
-Run a placement / performance health-check across every detected config file:
+| Mode | Example input | Written as | Notes |
+|---|---|---|---|
+| default | `/opt/jdk` | `export K=/opt/jdk` | Simple values stay unquoted |
+| default | `$HOME/bin` | `export K="$HOME/bin"` | `$VAR` and `${VAR}` expand |
+| default | `~/bin` | `export K="$HOME/bin"` | A leading `~/` becomes `$HOME/` so it still expands |
+| default | `say "hi"` | `export K="say \"hi\""` | `"` and `\` are escaped |
+| default | `$(brew --prefix)` | **rejected** | It would run on every shell start |
+| `--literal` | `$HOME $(x)` | `export K='$HOME $(x)'` | Nothing expands |
+| `--raw` | `$(brew --prefix)` | `export K=$(brew --prefix)` | Unchecked; you own the syntax |
+
+Values must be a single line. For `--type eval`, the value is a command by
+definition, e.g. `--value '"$(rbenv init -)"'`, so it is written as given.
+
+## Where things go
+
+When `--target` is omitted, envset works out what the variable is for, its intent,
+and picks the file whose *effective* scope covers it:
+
+| Intent | Example | zsh | bash |
+|---|---|---|---|
+| Every shell, including scripts and cron | `PATH`, `JAVA_HOME`, `GOPATH` | `.zshenv` | `.bash_profile` / `.profile` |
+| Login shells | `SSH_AUTH_SOCK` | `.zprofile` | `.bash_profile` |
+| Interactive only | `EDITOR`, `PS1`, aliases | `.zshrc` | `.bashrc` |
+| GUI apps (Dock, Spotlight) | anything needed by IDEs | `launchd` | `launchd` |
+
+A file's *effective* scope is the broadest scope that actually loads it. For example,
+if `~/.gg_system_exports` is declared for all sessions but only `.zprofile`
+sources it, its effective scope is *login*. The placer then picks a better file
+and warns you. `envset audit` explains how to fix the chain.
+
+### launchd (GUI apps)
+
+`--target launchd` writes `launchctl setenv` lines to
+`~/.config/envset/launchd.sh` and installs
+`~/Library/LaunchAgents/com.envset.environment.plist`, which runs the script at
+login. It also applies the change to the current login session right away.
+
+## Logging
+
+Every run is recorded in `~/.config/envset/logs/envset.log`. The inputs, the
+placement decision and the result are logged; values of secret-looking keys
+(`*_TOKEN`, `*_KEY`, `PASSWORD`, …) are redacted.
+`-v/--verbose` adds a per-step trace.
+
+The log location is the first of these that is set:
+1. `$ENVSET_LOG_FILE`
+2. `$ENVSET_LOG_DIR/envset.log`
+3. either of those keys in `~/.config/envset/.env`
+4. either of those keys in `./.env`
+
+`$XDG_CONFIG_HOME` replaces `~/.config` where it is honoured (rules and backups).
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `ENVSET_LOG_FILE`, `ENVSET_LOG_DIR` | Log location |
+| `ENVSET_BACKUP_DIR` | Backup location (default `~/.config/envset/backups`) |
+| `ENVSET_NO_SYNTAX_CHECK=1` | Skip the shell parse check before writing. Not recommended |
+| `XDG_CONFIG_HOME` | Base for the config directory |
+
+## Development
 
 ```bash
-envset audit                       # report on stdout
-envset --verbose audit             # adds per-method TRACE entries in the log
-tail -f ~/.config/envset/logs/envset.log   # watch flow live in another terminal
+go build ./... && go vet ./... && go test ./...
 ```
 
-Every CLI run is recorded to an audit log. The terminal stays clean — log output
-goes only to the file. Each invocation is delimited by an 80-char rule so
-multiple runs stay easy to scan.
+The tests never touch your real files. Backups go to a temp directory, and
+`launchctl` is replaced by a fake.
 
-```
-================================================================================
-RUN  2026-05-06T10:48:28+05:30  pid=48673
-cmd  envset add --key FOO --value bar
-opts verbose=false
-================================================================================
-10:48:28.594 [STEP  ] ops.Add
-10:48:28.594 [INPUT ] key="FOO" value="bar" target="" type="export" dry_run=false ...
-10:48:28.594 [STEP  ] auto-placement
-10:48:28.661 [DECIDE] placed=zshenv path=/Users/.../.zshenv confidence=85% ...
-10:48:28.661 [RESULT] add: wrote FOO to /Users/.../.zshenv
-10:48:28.661 [DONE ] elapsed=68ms
-================================================================================
-```
-
-| Verbosity | What lands in the log file | Stderr |
-|-----------|---------------------------|--------|
-| Default | inputs, wizard Q&A, placement decision, final result | nothing |
-| `-v` / `--verbose` | + per-method trace + every placement candidate | one-line `[envset] verbose log: <path>` hint at startup |
-
-**Log location** is resolved in this order (first non-empty wins):
-
-1. `$ENVSET_LOG_FILE` (full path)
-2. `$ENVSET_LOG_DIR/envset.log`
-3. `~/.config/envset/.env` containing either of the above keys
-4. `./.env` in the current working directory containing either of the above keys
-5. **Default**: `~/.config/envset/logs/envset.log`
-
-Paths beginning with `~/` or `$HOME/` are expanded.
-
-### Source-chain awareness
-
-The placer doesn't just look at a file's *declared* scope — it follows
-`source ...` directives in your config files and computes each file's
-**effective scope** (the broadest scope that actually reaches it).
-
-Concrete example: you keep cross-shell exports in `~/.gg_system_exports`,
-declared `all_sessions`. If you only `source ~/.gg_system_exports` from
-`~/.zprofile`, its **effective scope is login** — variables defined there
-won't reach scripts, cron jobs, or `(zsh -c ...)` invocations.
-
-When you run `envset add JAVA_HOME /opt/jdk`, the placer:
-
-1. Detects the intent as `category=application scope=all_sessions`.
-2. Penalises every file whose effective scope can't reach `all_sessions`
-   (`gg_system_exports` drops by 0.20 — see `[TRACE]` lines in the log).
-3. Promotes `~/.zshenv` (effective scope still `all_sessions`) to the top.
-4. **Asks you in the wizard** when a familiar custom file is broken — three
-   options: write to it anyway, write to the correct primary file, or bail
-   and run `envset audit` to fix the source-chain.
-
-Non-interactive runs (`--yes`) print a `WARNING:` to stderr if the chosen
-file has a scope mismatch or if the same key already exists in other files
-(those copies will be shadowed).
-
-## Variable Types
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `export` | Standard export | `export FOO=bar` |
-| `eval` | Eval command output | `eval $(rbenv init -)` |
-| `source` | Source a file | `source /path/to/file` |
-| `path_append` | Append to PATH | `export PATH="$PATH:/new/path"` |
-| `path_prepend` | Prepend to PATH | `export PATH="/new/path:$PATH"` |
-| `fish_set` | Fish shell set | `set -x FOO bar` |
-
-## Project Structure
+Commits in this repo go through the **COMLOG** protocol (see `AGENTS.md`).
+`scripts/comlog-gate.sh` checks the staged tree: no binaries or secrets, and
+build, vet and tests pass, with no new test failures compared with HEAD.
 
 ```
 envset/
-├── cmd/           # Cobra CLI commands
+├── cmd/              CLI (cobra)
 ├── pkg/
-│   ├── detector/  # Shell and OS detection
-│   ├── placer/    # Smart placement engine (intent → config file)
-│   │   ├── registry.go    # Config file registry (standard + custom)
-│   │   ├── intent.go      # Variable classification
-│   │   ├── rules.go       # Heuristic scoring
-│   │   └── placer.go      # Main Analyze() → ranked suggestions
-│   ├── targets/   # Shell config file operations
-│   ├── wizard/    # Interactive prompts
-│   └── ops/       # Business logic orchestration
-├── main.go
-└── go.mod
+│   ├── detector/     OS / shell detection
+│   ├── placer/       intent → file ranking, source-chain analysis, wizard questions
+│   ├── targets/      reading and editing shell files and launchd; value encoding; safe writes
+│   ├── fsutil/       atomic writes, backups, restore
+│   ├── audit/        health checks and --fix
+│   ├── rules/        built-in and user-acknowledged audit rules (~/.config/envset/*.json)
+│   ├── lazy/         lazy-load wrapper generator
+│   ├── logger/       run log
+│   ├── wizard/       interactive prompts
+│   └── ops/          orchestration behind each command
+├── scripts/comlog-gate.sh
+└── docs/TUTORIAL.md
 ```
 
-## TBD / Future Enhancements
+## Not yet supported
 
-- `.env` file support
-- `launchd` plist support (macOS)
-- IDE settings (VSCode `settings.json`, `launch.json`)
+- `.env` files
+- IDE settings
 - Linux `systemd` environment
-- Docker environment support
-- Kubernetes ConfigMap/Secret support
+- Docker or Kubernetes environment
 
 ## License
 
-BSD-3-Clause — see [LICENSE](LICENSE) for details.
+BSD-3-Clause. See [LICENSE](LICENSE).
