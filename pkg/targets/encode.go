@@ -34,8 +34,14 @@ func ValidateKey(key string) error {
 	return nil
 }
 
-// bareSafe values need no quoting in any supported shell.
-var bareSafe = regexp.MustCompile(`^[A-Za-z0-9_./:@%+,=-]+$`)
+var bareChars = regexp.MustCompile(`^[A-Za-z0-9_./:@%+,=-]+$`)
+
+// bare reports whether v needs no quoting in any supported shell. zsh expands
+// a word starting "=" to a command's path, also after ":" in an assignment, so
+// such values are quoted.
+func bare(v string) bool {
+	return bareChars.MatchString(v) && !strings.HasPrefix(v, "=") && !strings.Contains(v, ":=")
+}
 
 func checkNoNewline(v string) error {
 	if strings.ContainsAny(v, "\x00\n\r") {
@@ -85,7 +91,7 @@ func encodePosix(v string, mode QuoteMode, forceQuote bool) (string, error) {
 		if err := checkNoNewline(v); err != nil {
 			return "", err
 		}
-		if !forceQuote && bareSafe.MatchString(v) {
+		if !forceQuote && bare(v) {
 			return v, nil
 		}
 		return posixSingle(v), nil
@@ -93,7 +99,7 @@ func encodePosix(v string, mode QuoteMode, forceQuote bool) (string, error) {
 		if err := checkExpandable(v); err != nil {
 			return "", err
 		}
-		if !forceQuote && bareSafe.MatchString(v) {
+		if !forceQuote && bare(v) {
 			return v, nil
 		}
 		return `"` + posixDoubleInner(v) + `"`, nil
@@ -124,6 +130,23 @@ func encodePosixPathElem(v string, mode QuoteMode) (string, error) {
 	}
 }
 
+// fishSingle quotes v literally for fish, where (unlike POSIX shells)
+// backslash still escapes "\" and "'" inside single quotes.
+func fishSingle(v string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'"
+}
+
+// encodeFishPathElem is encodePosixPathElem for fish files.
+func encodeFishPathElem(v string, mode QuoteMode) (string, error) {
+	if mode == QuoteLiteral {
+		if err := checkNoNewline(v); err != nil {
+			return "", err
+		}
+		return `"` + fishSingle(v) + `"`, nil
+	}
+	return encodePosixPathElem(v, mode)
+}
+
 // encodeFish encodes a value as a fish word.
 func encodeFish(v string, mode QuoteMode) (string, error) {
 	switch mode {
@@ -133,15 +156,15 @@ func encodeFish(v string, mode QuoteMode) (string, error) {
 		if err := checkNoNewline(v); err != nil {
 			return "", err
 		}
-		if bareSafe.MatchString(v) {
+		if bare(v) {
 			return v, nil
 		}
-		return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'", nil
+		return fishSingle(v), nil
 	case QuoteExpand:
 		if err := checkExpandable(v); err != nil {
 			return "", err
 		}
-		if bareSafe.MatchString(v) {
+		if bare(v) {
 			return v, nil
 		}
 		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(tildeToHome(v)) + `"`, nil

@@ -329,15 +329,21 @@ func (s *ShellTarget) formatLines(key, value string, varType VarType, quote Quot
 			return nil, err
 		}
 	}
+	// fish quotes differently from POSIX shells, whatever the entry type.
+	word := func(v string, mode QuoteMode) (string, error) { return encodePosix(v, mode, false) }
+	pathElem := encodePosixPathElem
+	if s.shell == "fish" {
+		word, pathElem = encodeFish, encodeFishPathElem
+	}
 	switch varType {
 	case VarTypeExport:
-		v, err := encodePosix(value, quote, false)
+		v, err := word(value, quote)
 		if err != nil {
 			return nil, err
 		}
 		return []string{fmt.Sprintf("export %s=%s", key, v)}, nil
 	case VarTypeExportAndPathAppend:
-		v, err := encodePosix(value, quote, false)
+		v, err := word(value, quote)
 		if err != nil {
 			return nil, err
 		}
@@ -349,13 +355,13 @@ func (s *ShellTarget) formatLines(key, value string, varType VarType, quote Quot
 		}
 		return []string{"eval " + value}, nil
 	case VarTypeSource:
-		v, err := encodePosix(value, quote, false)
+		v, err := word(value, quote)
 		if err != nil {
 			return nil, err
 		}
 		return []string{"source " + v}, nil
 	case VarTypePathAppend, VarTypePathPrepend:
-		v, err := encodePosixPathElem(value, quote)
+		v, err := pathElem(value, quote)
 		if err != nil {
 			return nil, err
 		}
