@@ -17,12 +17,9 @@ import (
 	"github.com/experimentalist/envset/pkg/rules"
 	"github.com/experimentalist/envset/pkg/targets"
 	"github.com/experimentalist/envset/pkg/term"
+	"github.com/experimentalist/envset/pkg/version"
 	"github.com/experimentalist/envset/pkg/wizard"
 )
-
-// envsetVersion is stamped into ideals.json's GeneratedBy field.
-// TBD: replace with -ldflags injection during release builds.
-const envsetVersion = "dev"
 
 // Add adds an environment variable entry.
 // When printSource is true, only the `source <file>` command is written to stdout
@@ -430,7 +427,7 @@ func Audit(fix, dryRun, yes bool) error {
 
 	// Load layered rules: ideals (built-in) + custom (user-confirmed).
 	// Loading never writes; ideals.json/custom.json are only persisted by --fix.
-	loaded, err := rules.Load(envsetVersion)
+	loaded, err := rules.Load(version.String())
 	if err != nil {
 		return fmt.Errorf("loading rules: %w", err)
 	}

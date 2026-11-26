@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -300,5 +301,18 @@ func TestParallelProcessesDoNotLoseWrites(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(home, ".zshrc"))
 	if n := strings.Count(string(b), "export P"); n != 25 {
 		t.Fatalf("%d of 25 writes survived", n)
+	}
+}
+
+func TestVersionCommandAndFlag(t *testing.T) {
+	home := t.TempDir()
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		r := run(t, home, args...)
+		if r.code != 0 || !strings.HasPrefix(r.stdout, "envset ") || !strings.Contains(r.stdout, runtime.GOOS+"/"+runtime.GOARCH) || strings.Count(r.stdout, "\n") != 1 {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q", args, r.code, r.stdout, r.stderr)
+		}
+	}
+	if r := run(t, home, "version", "extra"); r.code == 0 {
+		t.Error("stray argument accepted")
 	}
 }

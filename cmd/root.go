@@ -10,6 +10,7 @@ import (
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/ops"
 	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/experimentalist/envset/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -56,6 +57,7 @@ Subcommands:
   reload   Print source commands for a config file or your startup files
   restore  Undo the last change to a config file from its backup
   lazy     Generate a lazy-load wrapper for a slow-init tool
+  version  Show which build is running
 
 Every write is atomic and preceded by a backup in ~/.config/envset/backups.
 `,
@@ -170,6 +172,15 @@ a prompt or hook, which a lazy wrapper would leave missing.`,
 	},
 }
 
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show which build of envset is running",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(version.Full())
+	},
+}
+
 var restoreCmd = &cobra.Command{
 	Use:   "restore",
 	Short: "Undo the last change to a config file from its backup",
@@ -211,6 +222,11 @@ Exits non-zero if any error-level finding is reported.`,
 }
 
 func init() {
+	// --version prints the same line as the version command.
+	rootCmd.Version = version.String()
+	rootCmd.SetVersionTemplate(version.Full() + "\n")
+	rootCmd.AddCommand(versionCmd)
+
 	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd, lazyCmd, restoreCmd)
 
 	// add flags
