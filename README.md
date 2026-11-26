@@ -108,6 +108,11 @@ What `add` does depends on what's already in the file:
 
 For PATH types, envset only checks whether the exact entry is already there. It never replaces your existing PATH lines.
 
+If the same key is also set in another file, envset tells you which value your
+shells will actually use (it follows load order and `source` lines). When you
+don't pass `--target`, it suggests the definition that wins, so the change takes
+effect. Commented-out lines don't count as definitions.
+
 ### `remove`
 
 Comments the matching line(s) out by default (`# export FOO=…`). Pass
@@ -138,6 +143,7 @@ pick the pre-restore backup with `--backup`.
 
 `envset audit` scans every known config file and reports:
 - PATH assignments that corrupt `$PATH`
+- a quoted `~` in `PATH` (`"~/bin:$PATH"`), which zsh and scripts never expand
 - exports placed in interactive-only files
 - `source` chains that never load a file
 - duplicate `compinit` calls
@@ -169,11 +175,14 @@ envset lazy pyenv --write  # add to your interactive rc file (no duplicates)
 envset lazy mytool --init-cmd "mytool init zsh"
 ```
 
+`starship`, `oh-my-posh`, `direnv`, `atuin` and `mcfly` are refused: their init
+installs a prompt or hook, which a lazy wrapper would leave missing.
+
 ### `detect`, `list`, `reload`
 
 - `detect` shows the shell envset places entries for and how it chose it, the shell it is running under, and which of that shell's config files exist.
-- `list --target X [--key K]` shows the entries in a file, including commented-out ones.
-- `reload [--target X]` prints `source` lines for `eval`. A child process can't change its parent shell's environment, so this is how you apply a change to the shell you're in:
+- `list --target X [--key K]` shows the definitions in a file (exports, assignments, `source`, `eval`, aliases), including commented-out ones.
+- `reload [--target X]` prints `source` lines for `eval`. Without `--target`, it prints the files your shell reads at startup, in load order (for zsh: `.zshenv`, `.zprofile`, `.zshrc`). A child process can't change its parent shell's environment, so this is how you apply a change to the shell you're in:
 
 ```bash
 eval "$(envset reload --target zshenv)"
@@ -207,6 +216,9 @@ and picks the file whose *effective* scope covers it:
 | Login shells | `SSH_AUTH_SOCK` | `.zprofile` | `.bash_profile` |
 | Interactive only | `EDITOR`, `PS1`, aliases | `.zshrc` | `.bashrc` |
 | GUI apps (Dock, Spotlight) | anything needed by IDEs | `launchd` | `launchd` |
+
+If your shell has no file for a scope (bash has none that every shell reads;
+fish has only `config.fish`), envset uses the closest one and says so.
 
 A file's *effective* scope is the broadest scope that actually loads it. For example,
 if `~/.gg_system_exports` is declared for all sessions but only `.zprofile`
