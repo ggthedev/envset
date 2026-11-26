@@ -12,15 +12,18 @@ and uses a throwaway home directory, so nothing on your machine changes.
 - **It picks the right file.** `PATH` and `JAVA_HOME` go in `.zshenv` so scripts
   and cron see them; `EDITOR` and aliases go in `.zshrc`. It also follows your
   `source` chains and warns when a file never gets loaded.
-- **It never corrupts your config.**
+- **It protects your config.**
   - Writes are atomic: a temp file is written first, then swapped in.
   - Every write is preceded by a backup.
+  - Parallel runs wait for each other, and a file that changed while envset was editing it is left alone.
+  - A file you made read-only (`chmod a-w`) is refused.
   - envset refuses any change that would stop the file parsing (checked with `zsh -n`, `bash -n` or `fish --no-execute`).
   - Symlinks into a dotfiles repo stay symlinks, and file permissions are kept.
 - **It's safe to re-run.**
   - Adding an identical line does nothing.
-  - Adding the same key with a new value updates that line in place.
+  - Adding the same key with a new value updates that line in place, keeping its trailing comment.
   - Removing a line leaves the rest of the file byte-for-byte identical.
+  - It [won't rewrite code it could damage](#lines-envset-wont-rewrite), such as a definition inside an `if`.
 - **It blocks injection.**
   - Variable names are validated.
   - Command substitution (`$(...)` or backticks) in a value is rejected unless you explicitly pass `--raw`.
@@ -41,6 +44,17 @@ Make sure `~/go/bin` is on your `PATH`, which envset can do for you:
 ```bash
 ~/go/bin/envset add --type path_append --value '~/go/bin' --target zshenv
 ```
+
+To keep builds from several branches side by side, or to build for another Mac:
+
+```bash
+scripts/build-branches.sh develop                 # output/envset-dev
+MACS=1 scripts/build-branches.sh develop          # Intel and Apple Silicon binaries
+INSTALL=1 scripts/build-branches.sh develop       # also refresh output/envset
+envset version                                    # shows branch@commit and platform
+```
+
+A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <file>` clears that.
 
 Once the repo is pushed to GitHub you can install or upgrade on any Mac with:
 
@@ -66,10 +80,12 @@ envset audit                                         # health check, read-only
 envset audit --dry-run                               # plus the diff of every safe fix
 envset audit --fix                                   # review and apply safe fixes
 envset lazy pyenv --write                            # lazy-load a slow tool
+envset version                                       # which build is this
 eval "$(envset reload --target zshenv)"              # apply in the current shell
 ```
 
 Run `envset add` or `envset remove` with no flags to start an interactive wizard.
+Give some flags and the wizard asks only for the rest.
 Prompts go to stderr, so stdout stays clean for `eval`. Without a terminal
 (cron, pipes, `< /dev/null`) or with `--yes`, a missing flag is an error
 instead of a prompt, so envset never hangs in a script.
@@ -96,6 +112,7 @@ only on Macs where they exist.
 | `--yes` | Accept the auto-placed file when `--target` is omitted (required for non-interactive auto-placement) |
 | `--literal` / `--raw` | Change value encoding |
 | `--dry-run` | Show exactly what would change; write nothing |
+| `--append` | Never edit existing lines: add a new one at the end that overrides them |
 | `--print-source` | Print only `source <file>` on stdout, so `eval "$(envset add … --print-source)"` applies it immediately |
 
 What `add` does depends on what's already in the file:
@@ -112,6 +129,26 @@ If the same key is also set in another file, envset tells you which value your
 shells will actually use (it follows load order and `source` lines). When you
 don't pass `--target`, it suggests the definition that wins, so the change takes
 effect. Commented-out lines don't count as definitions.
+
+### Lines envset won't rewrite
+
+envset edits a definition only when it is one whole statement that always runs.
+Otherwise it changes nothing, shows the lines (secrets hidden) and says why:
+
+```console
+$ envset add --key EDITOR --value vim --target zshenv
+  line 5: export EDITOR='nano'
+  line 7: export EDITOR='zed'
+Error: not changing EDITOR in ~/.zshenv: it is set inside a block (if, case, loop or function) (line 5, 7); edit it by hand, or pass --append to add a new line at the end that overrides it
+```
+
+This covers definitions:
+- inside `if`, `case`, a loop, a function, `{ }` or `( )`;
+- sharing a line with other code (`export A=1; export B=2`, or two assignments);
+- continued from or onto another line (a trailing `\`, `&&`, `||` or `|`).
+
+Text inside heredocs and multi-line strings is ignored. `add --append` writes a
+new line instead; `remove` has no override, so edit those lines by hand.
 
 ### `remove`
 
@@ -175,6 +212,7 @@ envset lazy pyenv --write  # add to your interactive rc file (no duplicates)
 envset lazy mytool --init-cmd "mytool init zsh"
 ```
 
+Tool names may contain letters, digits and `_ . + -`.
 `starship`, `oh-my-posh`, `direnv`, `atuin` and `mcfly` are refused: their init
 installs a prompt or hook, which a lazy wrapper would leave missing.
 
@@ -201,6 +239,9 @@ alias eset='function _eset(){ eval "$(envset add "$@" --print-source)"; }; _eset
 | default | `$(brew --prefix)` | **rejected** | It would run on every shell start |
 | `--literal` | `$HOME $(x)` | `export K='$HOME $(x)'` | Nothing expands |
 | `--raw` | `$(brew --prefix)` | `export K=$(brew --prefix)` | Unchecked; you own the syntax |
+
+Values that zsh would expand (starting `=`, or containing `:=`) are quoted, and
+fish files use fish's own quoting.
 
 Values must be a single line. For `--type eval`, the value is a command by
 definition, e.g. `--value '"$(rbenv init -)"'`, so it is written as given.
@@ -292,10 +333,21 @@ envset/
 │   ├── logger/       run log
 │   ├── wizard/       interactive prompts
 │   ├── term/         TTY detection; prompts on stderr
+│   ├── version/      which build is running
 │   └── ops/          orchestration behind each command
-├── scripts/comlog-gate.sh
+├── scripts/          commit gate and per-branch builds
 └── docs/TUTORIAL.md
 ```
+
+## Limitations
+
+- envset reads shell files with a small scanner, not a full shell parser. When
+  unsure it refuses. It can't tell that an unconditional `return` or an unusual
+  zsh short loop stops a line from running, so check `envset list` if a change
+  seems to have no effect.
+- Locking coordinates envset runs only; an editor saving at the same instant is
+  narrowed by a re-check, not prevented.
+- `--target launchd` keeps only one added `PATH` entry (see [TODO.md](TODO.md)).
 
 ## Not yet supported
 
