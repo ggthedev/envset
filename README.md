@@ -215,18 +215,26 @@ login. It also applies the change to the current login session right away.
 
 ## Logging
 
-Every run is recorded in `~/.config/envset/logs/envset.log`. The inputs, the
-placement decision and the result are logged; values of secret-looking keys
-(`*_TOKEN`, `*_KEY`, `PASSWORD`, …) are redacted.
-`-v/--verbose` adds a per-step trace.
+Every run is recorded in `~/.config/envset/logs/envset.log`: the command, the
+inputs, the placement decision and the result. `-v/--verbose` adds a per-step
+trace.
+
+- **No secrets.** `--value` arguments are never written in the command line
+  that heads each run. In the inputs line, the values of secret-looking keys
+  (`*_TOKEN`, `*_KEY`, `PASSWORD`, …) are shown as `[redacted]`.
+- **Private.** The log and its folder are readable only by you (modes 0600 and 0700).
+- **Bounded.** Once the log passes 5 MB it is rotated to `envset.log.1`; three
+  old copies are kept.
 
 The log location is the first of these that is set:
 1. `$ENVSET_LOG_FILE`
 2. `$ENVSET_LOG_DIR/envset.log`
 3. either of those keys in `~/.config/envset/.env`
-4. either of those keys in `./.env`
 
-`$XDG_CONFIG_HOME` replaces `~/.config` where it is honoured (rules and backups).
+A `.env` in the current directory is never read, so running envset inside a
+project can't redirect its log.
+
+`$XDG_CONFIG_HOME` replaces `~/.config` everywhere (log, rules and backups).
 
 ## Environment variables
 
