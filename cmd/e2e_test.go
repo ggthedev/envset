@@ -223,3 +223,43 @@ func TestMalformedCustomRulesWarnButAuditRuns(t *testing.T) {
 		t.Fatalf("malformed custom.json was overwritten: %q", b)
 	}
 }
+
+func TestReloadAllEmitsOnlyStartupFiles(t *testing.T) {
+	home := t.TempDir()
+	for _, f := range []string{".zshrc", ".zshenv", ".gg_system_exports", ".bashrc"} {
+		os.WriteFile(filepath.Join(home, f), []byte("x=1\n"), 0o644)
+	}
+	run(t, home, "add", "--key", "G", "--value", "1", "--target", "launchd", "--dry-run")
+	r := run(t, home, "reload")
+	want := "source " + filepath.Join(home, ".zshenv") + "\nsource " + filepath.Join(home, ".zshrc") + "\n"
+	if r.stdout != want {
+		t.Fatalf("reload = %q, want %q", r.stdout, want)
+	}
+}
+
+func TestListHidesControlFlow(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".zshenv"), []byte("if true; then\n  export A=1\nelse\n  export A=2\nfi\n"), 0o644)
+	r := run(t, home, "list", "--target", "zshenv")
+	for _, bad := range []string{": if true", ": else", ": fi"} {
+		if strings.Contains(r.stdout, bad) {
+			t.Errorf("list shows %q:\n%s", bad, r.stdout)
+		}
+	}
+	if !strings.Contains(r.stdout, "line 2: export A=1") || !strings.Contains(r.stdout, "line 4: export A=2") {
+		t.Errorf("list lost definitions:\n%s", r.stdout)
+	}
+}
+
+func TestAddWarnsWhenAnotherDefinitionWins(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export K=rc\n"), 0o644)
+	r := run(t, home, "add", "--key", "K", "--value", "env", "--target", "zshenv")
+	if !strings.Contains(r.stderr, "interactive shells will use that value") || strings.Contains(r.stderr, "shadowed") {
+		t.Fatalf("stderr: %q", r.stderr)
+	}
+	r = run(t, home, "add", "--key", "K", "--value", "rc", "--yes")
+	if !strings.Contains(r.stdout, "already set") || strings.Contains(r.stdout, "will be updated") {
+		t.Fatalf("identical add: %q", r.stdout)
+	}
+}

@@ -62,16 +62,18 @@ func AskPlacementConfirmation(pl Placement, reg *Registry) (bool, string, error)
 	var confirm bool
 	fmt.Fprintf(os.Stderr, "\nSuggested file: %s (%s)\n", pl.File.Name, pl.File.Path)
 	fmt.Fprintf(os.Stderr, "Reason: %s (confidence: %.0f%%)\n", pl.Reason, pl.Confidence*100)
-	if pl.Update {
+	switch {
+	case pl.Identical:
+		fmt.Fprintln(os.Stderr, "Note: already set to this value here; nothing will change.")
+	case pl.Update:
 		fmt.Fprintln(os.Stderr, "Note: This key already exists — it will be updated.")
 	}
 	if pl.ScopeMismatch {
 		fmt.Fprintf(os.Stderr, "⚠ Effective scope is %s, not %s — variables may not reach all the shells you expect.\n",
 			pl.EffectiveScope, pl.File.Scope)
 	}
-	if len(pl.DuplicateLocations) > 0 {
-		fmt.Fprintf(os.Stderr, "⚠ Same key also defined in: %s — those copies will be shadowed.\n",
-			strings.Join(pl.DuplicateLocations, ", "))
+	for _, note := range pl.DuplicateNotes {
+		fmt.Fprintf(os.Stderr, "⚠ %s\n", note)
 	}
 	fmt.Fprintln(os.Stderr)
 
@@ -201,7 +203,7 @@ func AskUserIntent(intent Intent) (Intent, error) {
 		if err != nil {
 			return intent, err
 		}
-		intent.Scope = scope
+		return intent.withChosenScope(scope), nil
 	}
 
 	// If generic, ask system vs user
@@ -220,6 +222,14 @@ func AskUserIntent(intent Intent) (Intent, error) {
 	}
 
 	return intent, nil
+}
+
+// withChosenScope records the user's own answer to "when should this be
+// active?". Asking "system or personal?" afterwards would overwrite it.
+func (i Intent) withChosenScope(scope Scope) Intent {
+	i.Scope = scope
+	i.ScopeChosen = scope != ScopeUnknown
+	return i
 }
 
 func containsStr(s, substr string) bool {

@@ -33,6 +33,7 @@ func (r *Registry) BuildSourceChain() {
 	// Reset any previously computed data so this method is idempotent.
 	for i := range r.Files {
 		r.Files[i].SourcedFrom = nil
+		r.Files[i].sourcedAt = nil
 		r.Files[i].EffectiveScope = ""
 	}
 
@@ -46,9 +47,15 @@ func (r *Registry) BuildSourceChain() {
 		if err != nil {
 			continue
 		}
-		for _, refPath := range refs {
-			if child, ok := byPath[refPath]; ok {
-				child.SourcedFrom = append(child.SourcedFrom, parent.Path)
+		for _, ref := range refs {
+			if child, ok := byPath[ref.path]; ok {
+				if child.sourcedAt == nil {
+					child.sourcedAt = map[string]int{}
+				}
+				if _, seen := child.sourcedAt[parent.Path]; !seen {
+					child.SourcedFrom = append(child.SourcedFrom, parent.Path)
+				}
+				child.sourcedAt[parent.Path] = ref.line
 			}
 		}
 	}
@@ -60,20 +67,28 @@ func (r *Registry) BuildSourceChain() {
 	}
 }
 
+// sourceRef is one `source <path>` directive and the line it is on.
+type sourceRef struct {
+	path string
+	line int
+}
+
 // parseSourceLines reads a file once and returns every absolute path
 // referenced by a `source <path>` or `. <path>` directive (with ~ / $HOME
 // expanded). Comment lines are ignored.
-func parseSourceLines(path, home string) ([]string, error) {
+func parseSourceLines(path, home string) ([]sourceRef, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var out []string
+	var out []sourceRef
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	line := 0
 	for sc.Scan() {
+		line++
 		trim := strings.TrimSpace(sc.Text())
 		if trim == "" || strings.HasPrefix(trim, "#") {
 			continue
@@ -82,7 +97,8 @@ func parseSourceLines(path, home string) ([]string, error) {
 		if m == nil {
 			continue
 		}
-		out = append(out, expandHomePath(m[1], home))
+		ref := strings.Trim(m[1], `"';`)
+		out = append(out, sourceRef{path: expandHomePath(ref, home), line: line})
 	}
 	return out, sc.Err()
 }

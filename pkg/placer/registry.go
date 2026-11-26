@@ -23,6 +23,8 @@ type ConfigFile struct {
 	// `source <this>` (or `. <this>`) directive. Empty for primary files
 	// that the shell loads directly (.zshenv, .zshrc, .zprofile, etc).
 	SourcedFrom []string
+	// sourcedAt maps each SourcedFrom path to the line of its source directive.
+	sourcedAt map[string]int
 
 	// EffectiveScope is the broadest scope that ACTUALLY reaches this file
 	// in the shell-startup graph. Differs from Scope when a custom file is

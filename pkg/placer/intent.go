@@ -38,6 +38,9 @@ type Intent struct {
 	VarType  targets.VarType
 	Scope    Scope
 	Category Category
+	// ScopeChosen is true when the user picked Scope in the wizard; the
+	// category heuristics must then respect it instead of overriding it.
+	ScopeChosen bool
 }
 
 // DetectIntent infers category and tentative scope from the variable.
@@ -64,6 +67,11 @@ func DetectIntent(key, value string, varType targets.VarType) Intent {
 		intent.Scope = ScopeInteractive
 	case targets.VarTypeExport:
 		intent = classifyExport(key, value, intent)
+	case targets.VarTypeExportAndPathAppend:
+		// A tool directory that also goes on PATH (e.g. FOO_HOME) must reach
+		// every shell, like any other PATH entry.
+		intent.Category = CatSystem
+		intent.Scope = ScopeAllSessions
 	}
 
 	if isSecret(key) {

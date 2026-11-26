@@ -3,6 +3,7 @@ package targets
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -162,3 +163,14 @@ func VarTypeDescription(vt VarType) string {
 		return string(vt)
 	}
 }
+
+// definitionRe matches lines that set or load environment: export/set/source/
+// eval/alias/launchctl statements (also after &&, ||, ;, then, else, do) and
+// bare NAME=value or NAME+=value assignments. A leading "#" is allowed so that
+// commented-out definitions still show.
+var definitionRe = regexp.MustCompile(
+	`(?:^\s*(?:#\s*)?|(?:&&|\|\||;|\{|\bthen\b|\belse\b|\bdo\b)\s*)` +
+		`(?:(?:export|source|eval|alias|setenv)\s+\S|set\s+-[a-zA-Z]+\s|\.\s+\S|launchctl\s+setenv\s|[A-Za-z_][A-Za-z0-9_]*\+?=)`)
+
+// IsDefinitionLine reports whether a config line defines or loads something.
+func IsDefinitionLine(line string) bool { return definitionRe.MatchString(line) }

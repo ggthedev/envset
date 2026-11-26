@@ -29,6 +29,10 @@ type Placement struct {
 	// candidate so the wizard / CLI can warn about dead duplicates regardless
 	// of which file is finally picked.
 	DuplicateLocations []string
+	// DuplicateNotes says, per other definition, which value shells will use.
+	DuplicateNotes []string
+	// Identical is true when this file already holds exactly the new line.
+	Identical bool
 }
 
 // Placer analyzes an intent and produces ranked placements.
@@ -64,23 +68,22 @@ func (p *Placer) Analyze(intent Intent) []Placement {
 	var placements []Placement
 
 	// 1. EXISTING KEY MATCH — highest priority
-	existing := p.findExisting(intent.Key)
+	existing := p.Registry.Definitions(intent.Key)
 	existingPaths := make([]string, 0, len(existing))
-	for _, f := range existing {
-		existingPaths = append(existingPaths, f.Path)
-	}
-	for _, f := range existing {
+	for _, d := range existing {
+		existingPaths = append(existingPaths, d.File.Path)
 		placements = append(placements, Placement{
-			File:       f,
+			File:       d.File,
 			Confidence: 0.98,
 			Reason:     fmt.Sprintf("Key %q already exists in this file", intent.Key),
 			Update:     true,
+			Identical:  p.holdsLine(d, intent),
 		})
 	}
 
 	// 2. SCOPE-CATEGORY HEURISTICS
 	heuristic := p.matchByHeuristic(intent)
-	if heuristic.Confidence > 0 {
+	if heuristic.Confidence > 0 && heuristic.File.Name != "" && !p.contains(placements, heuristic.File.Name) {
 		placements = append(placements, heuristic)
 	}
 
@@ -125,7 +128,64 @@ func (p *Placer) Analyze(intent Intent) []Placement {
 		annotateForScopeAndDuplicates(&placements[i], intent, existingPaths)
 	}
 
-	return sortPlacements(placements)
+	placements = p.preferEffective(sortPlacements(placements), existing)
+	for i := range placements {
+		placements[i].DuplicateNotes = p.Registry.DuplicateNotes(placements[i].File, intent.Key)
+	}
+	return placements
+}
+
+// preferEffective makes sure the suggestion actually takes effect: if the top
+// file's value would be overridden by an existing definition loaded later,
+// that definition (the one shells currently use) is suggested instead.
+func (p *Placer) preferEffective(placements []Placement, defs []Definition) []Placement {
+	if len(placements) == 0 {
+		return placements
+	}
+	top := placements[0]
+	var winner *Definition
+	for i := range defs {
+		d := &defs[i]
+		if d.File.Path == top.File.Path {
+			continue
+		}
+		topLine := 0
+		for _, own := range defs {
+			if own.File.Path == top.File.Path {
+				topLine = own.Line
+			}
+		}
+		if rel, _ := p.Registry.Compare(top.File, topLine, *d); rel != OtherWins {
+			continue
+		}
+		if winner == nil {
+			winner = d
+		} else if rel, _ := p.Registry.Compare(winner.File, winner.Line, *d); rel == OtherWins {
+			winner = d
+		}
+	}
+	if winner == nil {
+		return placements
+	}
+	for i, pl := range placements {
+		if pl.File.Path == winner.File.Path {
+			pl.Reason = "Key is already set here, and this file loads later, so it is the value your shells use"
+			pl.Confidence = max(pl.Confidence, top.Confidence)
+			rest := append(placements[:i:i], placements[i+1:]...)
+			return append([]Placement{pl}, rest...)
+		}
+	}
+	return placements
+}
+
+// holdsLine reports whether the definition is already exactly the new line.
+func (p *Placer) holdsLine(d Definition, intent Intent) bool {
+	t, err := targets.Factory(d.File.Name, p.Registry.Home)
+	if err != nil {
+		return false
+	}
+	line, err := t.Preview(intent.Key, intent.Value, intent.VarType, targets.QuoteExpand)
+	return err == nil && line == d.Text
 }
 
 // annotateForScopeAndDuplicates fills in EffectiveScope, ScopeMismatch, and
@@ -170,26 +230,6 @@ func (p *Placer) Top(intent Intent) *Placement {
 	return &all[0]
 }
 
-// findExisting scans all registered files for an existing key.
-func (p *Placer) findExisting(key string) []ConfigFile {
-	var found []ConfigFile
-	for _, f := range p.Registry.Files {
-		if !f.Exists {
-			continue
-		}
-		t, err := targets.Factory(f.Name, p.Registry.Home)
-		if err != nil {
-			continue
-		}
-		entries, err := t.List(key)
-		if err != nil || len(entries) == 0 {
-			continue
-		}
-		found = append(found, f)
-	}
-	return found
-}
-
 // matchByHeuristic applies rules to score a specific file.
 func (p *Placer) matchByHeuristic(intent Intent) Placement {
 	var best ConfigFile
@@ -197,6 +237,12 @@ func (p *Placer) matchByHeuristic(intent Intent) Placement {
 	var reason string
 
 	switch {
+	// The user said when it should be active: honour that over the category.
+	case intent.ScopeChosen:
+		best = p.pickBestInScope(intent.Scope)
+		score = 0.85
+		reason = fmt.Sprintf("You chose %s scope", intent.Scope)
+
 	// PATH → all_sessions, prefer existing files
 	case intent.Category == CatPath:
 		best = p.pickBestInScope(ScopeAllSessions)
@@ -245,6 +291,11 @@ func (p *Placer) matchByHeuristic(intent Intent) Placement {
 		reason = "Defaulting to interactive scope"
 	}
 
+	wanted := intent.Scope
+	if wanted != ScopeUnknown && best.Name != "" && best.Scope != wanted && best.Scope != ScopeSession {
+		reason = fmt.Sprintf("%s (no %s file for %s; %s is the closest)", reason, wanted, p.Registry.Shell, best.Name)
+	}
+
 	return Placement{
 		File:       best,
 		Confidence: score,
@@ -252,27 +303,39 @@ func (p *Placer) matchByHeuristic(intent Intent) Placement {
 	}
 }
 
-// pickBestInScope selects the highest-priority, existing file in a scope.
-// Falls back to highest-priority even if missing.
+// scopeFallbacks lists, per wanted scope, which scopes to try in order. Not
+// every shell has a file for each: bash has no "all sessions" file and fish
+// has only config.fish.
+var scopeFallbacks = map[Scope][]Scope{
+	ScopeAllSessions: {ScopeAllSessions, ScopeLogin, ScopeInteractive},
+	ScopeLogin:       {ScopeLogin, ScopeAllSessions, ScopeInteractive},
+	ScopeInteractive: {ScopeInteractive, ScopeAllSessions, ScopeLogin},
+	ScopeSession:     {ScopeSession, ScopeAllSessions, ScopeLogin, ScopeInteractive},
+	ScopeUnknown:     {ScopeInteractive, ScopeAllSessions, ScopeLogin},
+}
+
+// pickBestInScope selects the best file for a scope, falling back to the
+// closest scope the shell has a file for.
 func (p *Placer) pickBestInScope(scope Scope) ConfigFile {
-	var best *ConfigFile
-	for i := range p.Registry.Files {
-		f := &p.Registry.Files[i]
-		if f.Scope != scope {
-			continue
+	for _, s := range scopeFallbacks[scope] {
+		var best *ConfigFile
+		for i := range p.Registry.Files {
+			f := &p.Registry.Files[i]
+			if f.Scope != s {
+				continue
+			}
+			// An existing file beats a missing one: creating .bash_profile
+			// next to an existing .profile would stop bash reading .profile.
+			if best == nil || (f.Exists && !best.Exists) ||
+				(f.Exists == best.Exists && f.Priority < best.Priority) {
+				best = f
+			}
 		}
-		if best == nil || f.Priority < best.Priority {
-			best = f
-		}
-		// Prefer existing files of same priority
-		if f.Exists && !best.Exists && f.Priority == best.Priority {
-			best = f
+		if best != nil {
+			return *best
 		}
 	}
-	if best == nil {
-		return ConfigFile{}
-	}
-	return *best
+	return ConfigFile{}
 }
 
 func (p *Placer) contains(placements []Placement, name string) bool {

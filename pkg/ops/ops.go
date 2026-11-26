@@ -97,7 +97,17 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 			fmt.Fprintf(infoOut, "Auto-placed: %s (%s)\n", top.File.Name, top.File.Path)
 			fmt.Fprintf(infoOut, "Reason: %s (confidence: %.0f%%)\n", top.Reason, top.Confidence*100)
 			if top.Update {
-				fmt.Fprintln(infoOut, "Note: This key already exists — it will be updated.")
+				// A dry run tells "update" apart from "already set" for the
+				// exact quoting the user asked for.
+				if t, err := targets.Factory(top.File.Name, info.HomeDir); err == nil {
+					if res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: true, Quote: quote}); err == nil {
+						if res.Outcome == targets.Unchanged {
+							fmt.Fprintln(infoOut, "Note: already set to this value.")
+						} else {
+							fmt.Fprintln(infoOut, "Note: This key already exists — it will be updated.")
+						}
+					}
+				}
 			}
 			if top.ScopeMismatch {
 				fmt.Fprintf(os.Stderr,
@@ -105,15 +115,10 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 					top.File.Name, top.EffectiveScope, top.File.Scope, intent.Scope)
 				logger.Trace("ops.Add: scope mismatch on top placement; warned on stderr")
 			}
-			if len(top.DuplicateLocations) > 0 {
-				fmt.Fprintf(os.Stderr,
-					"WARNING: %q is also defined in: %s — those copies will be shadowed.\n",
-					key, strings.Join(top.DuplicateLocations, ", "))
-				logger.Trace("ops.Add: duplicate locations on top placement: %v", top.DuplicateLocations)
-			}
 			targetName = top.File.Name
 
 			if !autoYes {
+				warnDuplicates(targetName, key)
 				logger.Result("auto-placement awaiting --yes confirmation; aborted")
 				fmt.Fprintln(infoOut, "Use --yes to skip this confirmation.")
 				return fmt.Errorf("auto-placement requires --yes to confirm")
@@ -133,6 +138,8 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 	if err != nil {
 		return err
 	}
+
+	warnDuplicates(targetName, key)
 
 	logger.Step("write")
 	res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: dryRun, Quote: quote})
@@ -168,6 +175,24 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 		PrintReloadHint(t.Path(), targetName)
 	}
 	return nil
+}
+
+// warnDuplicates tells the user, on stderr, when key is also defined in other
+// files and which of the values their shells will end up with.
+func warnDuplicates(targetName, key string) {
+	info, err := detector.Detect()
+	if err != nil {
+		return
+	}
+	reg := placer.NewPlacer(info).Registry
+	f, err := reg.FindByName(targetName)
+	if err != nil {
+		return // an explicit file path outside the registry
+	}
+	for _, note := range reg.DuplicateNotes(*f, key) {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", note)
+		logger.Warn("duplicate: %s", note)
+	}
 }
 
 // reportBackup tells the user where the pre-change copy went.
@@ -311,7 +336,8 @@ func List(key, targetName string) error {
 			prefix = "[commented] "
 		}
 		line := strings.TrimSpace(e.RawLine)
-		if line == "" {
+		// Show definitions, not the shell's control flow (if/else/fi) or prose.
+		if line == "" || (e.Key == "" && !targets.IsDefinitionLine(line)) {
 			continue
 		}
 		fmt.Printf("  line %d: %s%s\n", e.LineNum, prefix, line)
@@ -687,7 +713,8 @@ func reportApplied(ops []audit.FixOp, backups map[string]string) {
 }
 
 // Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.
-// If targetName is empty, all *existing* files in the registry are emitted in order.
+// If targetName is empty, it emits the existing files the user's shell reads on
+// its own, in load order (files they source come along with them).
 func Reload(targetName string) error {
 	logger.Step("ops.Reload")
 	logger.Input("target=%q", targetName)
@@ -722,15 +749,14 @@ func Reload(targetName string) error {
 		return nil
 	}
 
-	// All existing files
-	count := 0
-	for _, f := range p.Registry.Files {
-		if f.Exists {
-			PrintSourceCommand(os.Stdout, f.Path)
-			count++
-		}
+	files := p.Registry.StartupFiles()
+	for _, path := range files {
+		PrintSourceCommand(os.Stdout, path)
 	}
-	logger.Result("reload: emitted %d source line(s)", count)
+	if len(files) == 0 {
+		fmt.Fprintf(os.Stderr, "No %s startup files exist yet.\n", info.Shell)
+	}
+	logger.Result("reload: emitted %d source line(s)", len(files))
 	return nil
 }
 
