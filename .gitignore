@@ -1,2 +1,7 @@
-/envset/envset
-/envset/go.sum
+# Build outputs (built with `go build -o envset .`)
+/envset
+/envset_test
+/dist/
+
+# OS / editor noise
+.DS_Store
