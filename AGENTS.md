@@ -60,3 +60,9 @@ other time unless the user explicitly asks for a commit in other words.
 - `reset --hard`, `rebase`, `stash drop`, `clean`
 - committing to `main`/`master`
 - editing source files as part of COMLOG: commit what is there and nothing else
+
+## NOTES protocol
+
+For a question about the project (not a change request), or when a message contains **NOTES**:
+follow `.claude/agents/notes.md`. Answer from the code, then append the question and answer to
+`NOTES.md` at the repository root. That file is local: never commit it.
