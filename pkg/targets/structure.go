@@ -28,7 +28,8 @@ const (
 	inDouble = '"'
 	inANSI   = 'a' // $'…'
 	inTick   = '`'
-	inParen  = '(' // subshell, $( ), array
+	inParen  = '(' // subshell or $( )
+	inArray  = 'A' // name=( … )
 	inArith  = 'm' // (( ))
 	inBrace  = '{' // ${ }
 )
@@ -38,9 +39,18 @@ type heredoc struct {
 	stripTabs bool
 }
 
+// frame is an open quote, substitution or paren.
+type frame struct {
+	kind  byte
+	cases int  // case blocks already open: a ")" beyond these is a pattern
+	subst bool // $( ): what follows its ")" is still the same command
+}
+
 type scanner struct {
+	shell     string
 	fish      bool
-	stack     []byte
+	stack     []frame
+	cases     int
 	blocks    int
 	docs      []heredoc // announced; bodies start on the next line
 	continued bool
@@ -53,10 +63,13 @@ func (s *scanner) top() byte {
 	if len(s.stack) == 0 {
 		return 0
 	}
-	return s.stack[len(s.stack)-1]
+	return s.stack[len(s.stack)-1].kind
 }
-func (s *scanner) push(f byte) { s.stack = append(s.stack, f) }
-func (s *scanner) pop()        { s.stack = s.stack[:len(s.stack)-1] }
+func (s *scanner) push(kind byte) { s.stack = append(s.stack, frame{kind: kind, cases: s.cases}) }
+func (s *scanner) pushSubst() {
+	s.stack = append(s.stack, frame{kind: inParen, cases: s.cases, subst: true})
+}
+func (s *scanner) pop() { s.stack = s.stack[:len(s.stack)-1] }
 
 func (s *scanner) inString() bool {
 	switch s.top() {
@@ -69,20 +82,22 @@ func (s *scanner) inString() bool {
 func (s *scanner) depth() int {
 	d := s.blocks
 	for _, f := range s.stack {
-		if f == inParen || f == inArith {
+		if f.kind == inParen || f.kind == inArray || f.kind == inArith {
 			d++
 		}
 	}
 	return d
 }
 
-// scanShell returns one lineInfo per line.
-func scanShell(lines []string, fish bool) []lineInfo {
-	s := &scanner{fish: fish, cmdPos: true}
+// scanShell returns one lineInfo per line. shell is zsh, bash, sh or fish.
+func scanShell(lines []string, shell string) []lineInfo {
+	s := &scanner{shell: shell, fish: shell == "fish", cmdPos: true}
 	out := make([]lineInfo, len(lines))
 	for i, raw := range lines {
 		line := strings.TrimSuffix(raw, "\r")
-		if len(s.docs) > 0 {
+		// A heredoc body starts after the whole command line, including
+		// any backslash continuations of it.
+		if len(s.docs) > 0 && !s.continued {
 			out[i] = lineInfo{Inert: true, Depth: s.depth(), CommentAt: -1}
 			body := line
 			if s.docs[0].stripTabs {
@@ -105,9 +120,12 @@ func (s *scanner) line(line string) lineInfo {
 	s.continued = false
 	joins := false // the latest top-level token is &&, || or |
 	code := false  // the line has something other than blanks and a comment
-	if base == 0 && !backslash { // otherwise the words are still arguments
+	// A new line starts a command at top level and inside ( ) or $( ), unless
+	// it continues the previous one (then the words are still arguments).
+	if !backslash && (base == 0 || s.top() == inParen) {
 		s.cmdPos = true
 	}
+	redirect := -2 // index of the latest unescaped ">"
 
 	var word strings.Builder
 	started := false
@@ -163,7 +181,8 @@ func (s *scanner) line(line string) lineInfo {
 			case s.top() == inDouble && c == '$' && at(i+1) == '(':
 				i++
 				add('(')
-				s.push(inParen)
+				s.pushSubst()
+				s.cmdPos = true
 			case s.top() == inDouble && c == '$' && at(i+1) == '{':
 				i++
 				add('{')
@@ -211,7 +230,7 @@ func (s *scanner) line(line string) lineInfo {
 					i++
 					s.push(inArith)
 				} else {
-					s.push(inParen)
+					s.pushSubst()
 					s.cmdPos = true
 				}
 			}
@@ -246,7 +265,9 @@ func (s *scanner) line(line string) lineInfo {
 			case c == '&' && at(i+1) == '&', c == '|' && (at(i+1) == '|' || at(i+1) == '&'):
 				i++
 				joins = len(s.stack) <= base
-			case c == '|' && !(i > 0 && line[i-1] == '>'): // not the ">|" redirect
+			case c == '&' && at(i+1) == '|' && !s.fish:
+				i++ // zsh "&|": background and disown, not a pipe
+			case c == '|' && redirect != i-1: // not the ">|" redirect
 				joins = len(s.stack) <= base
 			}
 			s.cmdPos = true
@@ -259,6 +280,7 @@ func (s *scanner) line(line string) lineInfo {
 			}
 			end()
 			op()
+			s.cmdPos = false // a file name follows
 			for at(i+1) == '<' {
 				i++
 			}
@@ -269,11 +291,14 @@ func (s *scanner) line(line string) lineInfo {
 			}
 			end()
 			op()
+			s.cmdPos = false
+			redirect = i
 		case '(':
 			switch {
 			case strings.HasSuffix(word.String(), "="): // array: name=( … )
 				add(c)
-				s.push(inParen)
+				s.push(inArray)
+				s.cmdPos = false
 			case at(i+1) == '(' && !started:
 				op()
 				i++
@@ -292,13 +317,23 @@ func (s *scanner) line(line string) lineInfo {
 				if len(s.stack) >= base && started {
 					add(')', ')')
 				}
-			case s.top() == inParen:
+			case s.top() == inArray:
 				if started {
 					add(c)
 				}
 				end()
 				s.pop()
-				s.cmdPos = true
+				s.cmdPos = false
+				joins, code = false, true
+			case s.top() == inParen && s.cases <= s.stack[len(s.stack)-1].cases:
+				if started {
+					add(c)
+				}
+				end()
+				subst := s.stack[len(s.stack)-1].subst
+				s.pop()
+				s.cmdPos = !subst
+				joins, code = false, true
 			case s.top() == inArith:
 				add(c)
 			default: // a case pattern: "a)"
@@ -321,8 +356,11 @@ func (s *scanner) line(line string) lineInfo {
 func (s *scanner) keyword(w string) {
 	cmd := s.cmdPos
 	s.cmdPos = false
+	if s.top() == inArray {
+		return // array elements are data
+	}
 	open := func() { s.blocks++ }
-	close := func() {
+	closeBlock := func() {
 		if s.blocks > 0 {
 			s.blocks--
 		}
@@ -346,7 +384,7 @@ func (s *scanner) keyword(w string) {
 			open()
 			s.cmdPos = true
 		case "end":
-			close()
+			closeBlock()
 		case "else", "and", "or", "not":
 			s.cmdPos = true
 		}
@@ -358,7 +396,12 @@ func (s *scanner) keyword(w string) {
 		s.cmdPos = true
 		return
 	case "}":
-		close()
+		// zsh closes a block wherever "}" stands alone; bash and sh only where
+		// a command could start, elsewhere it is an argument.
+		if cmd || s.shell == "zsh" {
+			closeBlock()
+			s.cmdPos = true
+		}
 		return
 	}
 	if !cmd {
@@ -367,9 +410,16 @@ func (s *scanner) keyword(w string) {
 	switch w {
 	case "if", "case", "do":
 		open()
+		if w == "case" {
+			s.cases++
+		}
 		s.cmdPos = w != "case"
 	case "fi", "esac", "done":
-		close()
+		if w == "esac" && s.cases > 0 {
+			s.cases--
+		}
+		closeBlock()
+		s.cmdPos = true // another closer may follow without ";"
 	case "then", "else", "elif", "while", "until", "!", "time":
 		s.cmdPos = true
 	}
@@ -416,7 +466,7 @@ func (s *scanner) heredocStart(line string, i int) int {
 
 // entries parses every line and marks where each one sits.
 func (s *ShellTarget) entries(lines []string) []Entry {
-	infos := scanShell(lines, s.shell == "fish")
+	infos := scanShell(lines, s.shell)
 	out := make([]Entry, len(lines))
 	for i, line := range lines {
 		e := s.parseLine(line, i+1)

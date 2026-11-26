@@ -193,7 +193,7 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 	// string or continued line. (Unclosed blocks are left to the syntax guard:
 	// a file that parses has none.)
 	if res.Outcome == Appended {
-		infos := scanShell(tf.lines, s.shell == "fish")
+		infos := scanShell(tf.lines, s.shell)
 		if first := infos[len(tf.lines)-len(newLines)]; first.Inert || first.Continued {
 			return AddResult{}, fmt.Errorf("not appending to %s: it ends inside an unterminated string, heredoc or continued line; fix that first", s.path)
 		}
