@@ -8,6 +8,7 @@ const (
 	CheckDuplicateCompinit   = "duplicate-compinit"
 	CheckSlowInteractiveInit = "slow-interactive-init"
 	CheckDuplicateKeys       = "duplicate-keys"
+	CheckQuotedTildePath     = "quoted-tilde-path"
 )
 
 // BuiltinIdeals returns the default rule set shipped with this binary.
@@ -18,6 +19,13 @@ func BuiltinIdeals(envsetVersion string) Ideals {
 		Version:     CurrentVersion,
 		GeneratedBy: "envset " + envsetVersion,
 		Checks: []IdealCheck{
+			{
+				ID:              CheckQuotedTildePath,
+				Title:           "Quoted ~ in PATH never expands",
+				DefaultSeverity: "warning",
+				ApproxImpact:    "Commands in that directory are not found",
+				Description:     "A ~ inside quotes stays literal: zsh and other programs skip that PATH entry. Use $HOME.",
+			},
 			{
 				ID:              CheckBrokenPath,
 				Title:           "Broken PATH assignment",

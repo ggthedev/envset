@@ -50,6 +50,7 @@ func (a *Auditor) Run() Report {
 		bctx := blockCtxs[cf.Path]
 
 		findings = append(findings, checkBrokenPath(cf.Path, lines)...)
+		findings = append(findings, checkQuotedTildePath(cf.Path, lines)...)
 		findings = append(findings, checkMisplacedPathExports(cf, lines)...)
 		findings = append(findings, checkSourceChainMismatch(cf, lines, a.Registry)...)
 		findings = append(findings, checkDuplicateCompinit(cf, lines)...)
@@ -104,6 +105,47 @@ func checkBrokenPath(path string, lines []string) []Finding {
 				Fix:          &FindingFix{Edits: []FixEdit{{File: path, Line: i + 1}}},
 				CheckID:      rules.CheckBrokenPath,
 				ApproxImpact: "PATH corrupted on every shell start",
+			})
+		}
+	}
+	return out
+}
+
+var (
+	// A quoted PATH value: PATH="…", PATH+='…'. Group 1 is the opening quote
+	// plus body for double quotes, group 2 for single quotes.
+	quotedPathRe = regexp.MustCompile(`(?:^|[\s;&|])PATH\+?=(?:"((?:[^"\\]|\\.)*)"|'([^']*)')`)
+	// A "~" that starts a PATH element inside such a value.
+	tildeElemRe = regexp.MustCompile(`(^|:)~(/|:|$)`)
+)
+
+// checkQuotedTildePath flags PATH entries like "~/bin:$PATH". The shell does
+// not expand ~ inside quotes, so zsh and other programs never search that
+// directory (only bash's own command lookup would).
+func checkQuotedTildePath(path string, lines []string) []Finding {
+	var out []Finding
+	for i, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if strings.HasPrefix(trim, "#") {
+			continue
+		}
+		for _, m := range quotedPathRe.FindAllStringSubmatch(trim, -1) {
+			value := m[1] + m[2]
+			if !tildeElemRe.MatchString(value) {
+				continue
+			}
+			fixed := tildeElemRe.ReplaceAllString(value, "${1}$$HOME${2}")
+			out = append(out, Finding{
+				Severity:     SevWarn,
+				File:         path,
+				Line:         i + 1,
+				Code:         trim,
+				Title:        "Quoted ~ in PATH never expands",
+				Detail:       "Inside quotes ~ stays a literal character, so zsh, scripts and other programs do not search this directory.",
+				Suggestion:   fmt.Sprintf(`Use $HOME in double quotes: PATH="%s"`, fixed),
+				CheckID:      rules.CheckQuotedTildePath,
+				Subject:      value,
+				ApproxImpact: "Commands in that directory are not found",
 			})
 		}
 	}

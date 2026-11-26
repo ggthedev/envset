@@ -54,8 +54,8 @@ func Load(envsetVersion string) (Loaded, error) {
 	var out Loaded
 
 	ideals, err := readIdeals(idealsPath)
-	if err != nil || ideals.Version != CurrentVersion {
-		ideals = BuiltinIdeals(envsetVersion)
+	if builtin := BuiltinIdeals(envsetVersion); err != nil || ideals.Version != CurrentVersion || !ideals.covers(builtin) {
+		ideals = builtin
 		out.IdealsStale = true
 	}
 	out.Ideals = ideals
@@ -75,6 +75,17 @@ func Load(envsetVersion string) (Loaded, error) {
 	}
 	out.Custom = custom
 	return out, nil
+}
+
+// covers reports whether every built-in check is present, so an ideals.json
+// written by an older binary is refreshed when new checks are added.
+func (i Ideals) covers(builtin Ideals) bool {
+	for _, c := range builtin.Checks {
+		if i.FindCheck(c.ID) == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // PersistIdeals writes ideals.json if Load found it missing or stale.
