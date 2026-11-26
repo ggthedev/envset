@@ -216,6 +216,8 @@ func (s *ShellTarget) formatLine(key, value string, varType VarType) (string, er
 	switch varType {
 	case VarTypeExport:
 		return fmt.Sprintf("export %s=%s", key, s.quoteValue(value)), nil
+	case VarTypeExportAndPathAppend:
+		return fmt.Sprintf("export %s=%s\nexport PATH=\"$PATH:$%s\"", key, s.quoteValue(value), key), nil
 	case VarTypeEval:
 		return fmt.Sprintf("eval %s", value), nil
 	case VarTypeSource:

@@ -17,85 +17,127 @@ import (
 func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.VarType, confirmed bool, err error) {
 	logger.Step("wizard.RunAddWizard")
 
-	// 1. Key
-	keyPrompt := &survey.Input{
-		Message: "Variable name (e.g., FOO):",
-		Help:    "The environment variable key to set.",
-	}
-	if err = survey.AskOne(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
-		return
-	}
-	logger.QA("Variable name", key)
+	var varTypeStr string
+	step := 1
 
-	// Secret warning
-	if detector.IsSecret(key) {
-		warn := false
-		warnPrompt := &survey.Confirm{
-			Message: fmt.Sprintf("WARNING: %s looks like a secret/API key. Continue?", key),
-			Default: false,
+	for step <= 3 {
+		switch step {
+		case 1:
+			varTypeOpts := []string{
+				"export (export FOO=bar)",
+				"export and update PATH (export FOO=/dir, PATH=$PATH:$FOO)",
+				"path_append (PATH=\"$PATH:/new\")",
+				"path_prepend (PATH=\"/new:$PATH\")",
+				"eval (eval $(command))",
+				"source (source /path/to/file)",
+				"fish_set (set -x FOO bar, fish only)",
+				"q - Quit",
+			}
+			typePrompt := &survey.Select{
+				Message: "How should this be set?",
+				Options: varTypeOpts,
+				Default: varTypeOpts[0],
+			}
+			if err = survey.AskOne(typePrompt, &varTypeStr); err != nil {
+				return
+			}
+			if strings.HasPrefix(varTypeStr, "q") {
+				fmt.Println("Aborted.")
+				os.Exit(0)
+			}
+			logger.QA("Var type", varTypeStr)
+
+			switch {
+			case strings.HasPrefix(varTypeStr, "export and"):
+				varType = targets.VarTypeExportAndPathAppend
+			case strings.HasPrefix(varTypeStr, "export"):
+				varType = targets.VarTypeExport
+			case strings.HasPrefix(varTypeStr, "eval"):
+				varType = targets.VarTypeEval
+			case strings.HasPrefix(varTypeStr, "source"):
+				varType = targets.VarTypeSource
+			case strings.HasPrefix(varTypeStr, "path_append"):
+				varType = targets.VarTypePathAppend
+			case strings.HasPrefix(varTypeStr, "path_prepend"):
+				varType = targets.VarTypePathPrepend
+			case strings.HasPrefix(varTypeStr, "fish_set"):
+				varType = targets.VarTypeFishSet
+			}
+			step++
+
+		case 2:
+			if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
+				key = "PATH"
+				step++
+				continue
+			}
+
+			keyPrompt := &survey.Input{
+				Message: "Variable name (e.g., FOO) [q to quit, b to back]:",
+				Help:    "The environment variable key to set. Type 'q' to quit, 'b' to go back.",
+			}
+			if err = survey.AskOne(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
+				return
+			}
+			if key == "q" {
+				fmt.Println("Aborted.")
+				os.Exit(0)
+			}
+			if key == "b" {
+				step--
+				continue
+			}
+			logger.QA("Variable name", key)
+
+			if detector.IsSecret(key) {
+				warn := false
+				warnPrompt := &survey.Confirm{
+					Message: fmt.Sprintf("WARNING: %s looks like a secret/API key. Continue?", key),
+					Default: false,
+				}
+				if err = survey.AskOne(warnPrompt, &warn); err != nil {
+					return
+				}
+				logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", warn))
+				if !warn {
+					fmt.Println("Aborted.")
+					os.Exit(0)
+				}
+			}
+			step++
+
+		case 3:
+			valHelp := "The value to assign. For eval, enter the command. For source, enter the file path."
+			if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
+				valHelp = "The path to append/prepend to PATH."
+			}
+			valuePrompt := &survey.Input{
+				Message: "Value [q to quit, b to back]:",
+				Help:    valHelp + " Type 'q' to quit, 'b' to go back.",
+			}
+			if err = survey.AskOne(valuePrompt, &value, survey.WithValidator(survey.Required)); err != nil {
+				return
+			}
+			if value == "q" {
+				fmt.Println("Aborted.")
+				os.Exit(0)
+			}
+			if value == "b" {
+				if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
+					step -= 2 // go back to var type, since we skipped key
+				} else {
+					step--
+				}
+				continue
+			}
+			displayVal := value
+			if detector.IsSecret(key) {
+				displayVal = "[redacted]"
+			}
+			logger.QA("Value", displayVal)
+			step++
 		}
-		if err = survey.AskOne(warnPrompt, &warn); err != nil {
-			return
-		}
-		logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", warn))
-		if !warn {
-			fmt.Println("Aborted.")
-			os.Exit(0)
-		}
 	}
-
-	// 2. Var type
-	varTypeStr := ""
-	varTypeOpts := []string{
-		"export (export FOO=bar)",
-		"eval (eval $(command))",
-		"source (source /path/to/file)",
-		"path_append (PATH=\"$PATH:/new\")",
-		"path_prepend (PATH=\"/new:$PATH\")",
-		"fish_set (set -x FOO bar, fish only)",
-	}
-	typePrompt := &survey.Select{
-		Message: "How should this be set?",
-		Options: varTypeOpts,
-		Default: varTypeOpts[0],
-	}
-	if err = survey.AskOne(typePrompt, &varTypeStr); err != nil {
-		return
-	}
-	logger.QA("Var type", varTypeStr)
-
-	switch {
-	case strings.HasPrefix(varTypeStr, "export"):
-		varType = targets.VarTypeExport
-	case strings.HasPrefix(varTypeStr, "eval"):
-		varType = targets.VarTypeEval
-	case strings.HasPrefix(varTypeStr, "source"):
-		varType = targets.VarTypeSource
-	case strings.HasPrefix(varTypeStr, "path_append"):
-		varType = targets.VarTypePathAppend
-	case strings.HasPrefix(varTypeStr, "path_prepend"):
-		varType = targets.VarTypePathPrepend
-	case strings.HasPrefix(varTypeStr, "fish_set"):
-		varType = targets.VarTypeFishSet
-	}
-
-	// 3. Value
-	valHelp := "The value to assign. For eval, enter the command. For source, enter the file path."
-	if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
-		valHelp = "The path to append/prepend to PATH."
-	}
-	valuePrompt := &survey.Input{
-		Message: "Value:",
-		Help:    valHelp,
-	}
-	if err = survey.AskOne(valuePrompt, &value, survey.WithValidator(survey.Required)); err != nil {
-		return
-	}
-	displayVal := value
-	if detector.IsSecret(key) {
-		displayVal = "[redacted]"
-	}
-	logger.QA("Value", displayVal)
 
 	// 4. Detect environment & build placer
 	info, detectErr := detector.Detect()

@@ -11,8 +11,9 @@ import (
 type VarType string
 
 const (
-	VarTypeExport     VarType = "export"
-	VarTypeEval       VarType = "eval"
+	VarTypeExport              VarType = "export"
+	VarTypeExportAndPathAppend VarType = "export_and_path_append"
+	VarTypeEval                VarType = "eval"
 	VarTypeSource     VarType = "source"
 	VarTypePathAppend VarType = "path_append"
 	VarTypePathPrepend VarType = "path_prepend"
@@ -91,6 +92,8 @@ func VarTypeFromString(s string) (VarType, error) {
 	switch s {
 	case "export", "":
 		return VarTypeExport, nil
+	case "export_and_path_append":
+		return VarTypeExportAndPathAppend, nil
 	case "eval":
 		return VarTypeEval, nil
 	case "source":
@@ -111,6 +114,8 @@ func VarTypeDescription(vt VarType) string {
 	switch vt {
 	case VarTypeExport:
 		return "export FOO=bar"
+	case VarTypeExportAndPathAppend:
+		return "export FOO=/dir, PATH=$PATH:$FOO"
 	case VarTypeEval:
 		return "eval $(command)"
 	case VarTypeSource:
