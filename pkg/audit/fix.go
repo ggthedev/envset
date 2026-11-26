@@ -2,6 +2,7 @@ package audit
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/fsutil"
 	"io"
 	"os"
 	"sort"
@@ -139,6 +140,13 @@ func ApplyFixes(ops []FixOp) (map[string]string, error) {
 		byFile[op.File] = append(byFile[op.File], op)
 	}
 
+	// Lock every file before reading any, and hold the locks until all are written.
+	unlock, err := fsutil.LockAll(fileOrder)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	type planned struct {
 		raw, next []byte
 	}
@@ -157,7 +165,7 @@ func ApplyFixes(ops []FixOp) (map[string]string, error) {
 			}
 			cur := lines[op.Line-1]
 			if strings.TrimSuffix(cur, "\r") != op.OldLine {
-				return nil, fmt.Errorf("%s changed since the audit (line %d is now %q); re-run `envset audit --fix`", file, op.Line, cur)
+				return nil, fmt.Errorf("%s changed since the audit (line %d is different now); re-run `envset audit --fix`", file, op.Line)
 			}
 			if strings.HasSuffix(cur, "\r") {
 				lines[op.Line-1] = op.NewLine + "\r"

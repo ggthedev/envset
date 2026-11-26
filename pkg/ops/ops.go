@@ -817,6 +817,12 @@ func Lazy(toolName, initCmd string, write bool) error {
 		return fmt.Errorf("no interactive config file found to write lazy wrapper")
 	}
 
+	unlock, err := fsutil.Lock(target.Path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	// Idempotent: don't stack a second wrapper for the same tool.
 	header := lazy.Header(spec.Name)
 	existing, err := os.ReadFile(target.Path)

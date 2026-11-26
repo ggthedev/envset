@@ -63,6 +63,59 @@ func ResolvePath(path string) (string, error) {
 	return dest, nil
 }
 
+// canonicalPath gives one name per file: every symlink resolved, including
+// those in parent directories (on macOS /var is itself a link). The file need
+// not exist yet.
+func canonicalPath(path string) (string, error) {
+	real, err := ResolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	if real, err = filepath.Abs(real); err != nil {
+		return "", err
+	}
+	if r, err := filepath.EvalSymlinks(real); err == nil {
+		return r, nil
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(real)); err == nil {
+		return filepath.Join(dir, filepath.Base(real)), nil
+	}
+	return real, nil
+}
+
+// LockAll locks several files in a fixed order, once per real file, so two
+// callers cannot deadlock. See Lock.
+func LockAll(paths []string) (unlock func(), err error) {
+	byReal := map[string]string{}
+	for _, p := range paths {
+		real, err := canonicalPath(p)
+		if err != nil {
+			return nil, err
+		}
+		byReal[real] = p
+	}
+	reals := make([]string, 0, len(byReal))
+	for r := range byReal {
+		reals = append(reals, r)
+	}
+	sort.Strings(reals)
+	var held []func()
+	release := func() {
+		for _, u := range held {
+			u()
+		}
+	}
+	for _, r := range reals {
+		u, err := Lock(byReal[r])
+		if err != nil {
+			release()
+			return nil, err
+		}
+		held = append(held, u)
+	}
+	return release, nil
+}
+
 // CheckWritable refuses a file whose owner write bit is off. Replacing a file
 // by rename would otherwise ignore "chmod a-w". A missing file is writable.
 func CheckWritable(path string) error {
@@ -291,6 +344,11 @@ func Restore(path, backupPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading backup: %w", err)
 	}
+	unlock, err := Lock(path)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if _, err := backup(path, preRestoreSuffix); err != nil {
 		return "", fmt.Errorf("saving current state before restore: %w", err)
 	}

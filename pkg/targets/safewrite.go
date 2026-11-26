@@ -111,10 +111,30 @@ func CommitFile(path, shell string, oldData []byte, existed bool, newData []byte
 			return "", fmt.Errorf("creating directory for %s: %w", path, err)
 		}
 	}
+	if err := unchangedSinceRead(path, oldData, existed); err != nil {
+		return "", err
+	}
 	if err := fsutil.WriteFileAtomic(path, newData, newMode); err != nil {
 		return "", err
 	}
 	return backup, nil
+}
+
+// unchangedSinceRead checks, just before replacing path, that nothing else
+// (an editor, say, which takes no lock) changed it since envset read it.
+func unchangedSinceRead(path string, oldData []byte, existed bool) error {
+	now, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if !existed {
+			return nil
+		}
+	case err != nil:
+		return fmt.Errorf("re-reading %s: %w", path, err)
+	case existed && bytes.Equal(now, oldData):
+		return nil
+	}
+	return fmt.Errorf("%s changed while envset was editing it; nothing was written, run the command again", path)
 }
 
 func syntaxGuard(shell string, oldData []byte, existed bool, newData []byte) error {

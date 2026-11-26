@@ -2,6 +2,7 @@ package targets
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/fsutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,13 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 	newLines, err := s.formatLines(key, value, varType, opts.Quote)
 	if err != nil {
 		return AddResult{}, err
+	}
+	if !opts.DryRun {
+		unlock, err := fsutil.Lock(s.path)
+		if err != nil {
+			return AddResult{}, err
+		}
+		defer unlock()
 	}
 	tf, err := readTextFile(s.path)
 	if err != nil {
@@ -214,6 +222,13 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 	}
 	if key == "PATH" && opts.Value == "" {
 		return RemoveResult{}, fmt.Errorf("refusing to remove every PATH line in %s; pass --value <dir> to pick which entry", s.path)
+	}
+	if !opts.DryRun {
+		unlock, err := fsutil.Lock(s.path)
+		if err != nil {
+			return RemoveResult{}, err
+		}
+		defer unlock()
 	}
 	tf, err := readTextFile(s.path)
 	if err != nil {

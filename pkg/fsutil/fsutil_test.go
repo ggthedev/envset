@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setup(t *testing.T) (dir string) {
@@ -154,4 +155,29 @@ func TestReadOnlyFileIsRespected(t *testing.T) {
 	if got, _ := os.ReadFile(p); string(got) != "keep" {
 		t.Fatalf("content %q", got)
 	}
+}
+
+func TestLockAllWithAliasesDoesNotDeadlock(t *testing.T) {
+	dir := setup(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	old := LockTimeout
+	LockTimeout = 200 * time.Millisecond
+	defer func() { LockTimeout = old }()
+	p := filepath.Join(dir, "rc")
+	os.WriteFile(p, []byte("x"), 0o644)
+	link := filepath.Join(dir, "link")
+	os.Symlink(p, link)
+	unlock, err := LockAll([]string{p, link, p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lock(link); err == nil {
+		t.Fatal("link lock acquired while target is locked")
+	}
+	unlock()
+	u, err := Lock(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u()
 }

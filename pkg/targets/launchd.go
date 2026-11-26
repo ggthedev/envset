@@ -85,6 +85,13 @@ func (l *LaunchdTarget) Add(key string, value string, varType VarType, opts Writ
 	}
 	res := AddResult{Lines: []string{newLine}}
 
+	if !opts.DryRun {
+		unlock, err := fsutil.Lock(l.path)
+		if err != nil {
+			return res, err
+		}
+		defer unlock()
+	}
 	tf, err := readTextFile(l.path)
 	if err != nil {
 		return res, err
@@ -135,6 +142,13 @@ func (l *LaunchdTarget) Add(key string, value string, varType VarType, opts Writ
 func (l *LaunchdTarget) Remove(key string, opts RemoveOptions) (RemoveResult, error) {
 	if err := ValidateKey(key); err != nil {
 		return RemoveResult{}, err
+	}
+	if !opts.DryRun {
+		unlock, err := fsutil.Lock(l.path)
+		if err != nil {
+			return RemoveResult{}, err
+		}
+		defer unlock()
 	}
 	tf, err := readTextFile(l.path)
 	if err != nil {
