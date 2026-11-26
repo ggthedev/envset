@@ -25,11 +25,11 @@ type BlockContext struct {
 }
 
 var (
-	reIfStart = regexp.MustCompile(`^\s*if\s+(.*?)(?:\s*;\s*then\s*)?$`)
-	reElif    = regexp.MustCompile(`^\s*elif\s+(.*?)(?:\s*;\s*then\s*)?$`)
-	reFi      = regexp.MustCompile(`^\s*fi\b`)
-	reCaseIn  = regexp.MustCompile(`^\s*case\s+.*\bin\s*$`)
-	reEsac    = regexp.MustCompile(`^\s*esac\b`)
+	reIfStart       = regexp.MustCompile(`^\s*if\s+(.*?)(?:\s*;\s*then\s*)?$`)
+	reElif          = regexp.MustCompile(`^\s*elif\s+(.*?)(?:\s*;\s*then\s*)?$`)
+	reFi            = regexp.MustCompile(`^\s*fi\b`)
+	reCaseIn        = regexp.MustCompile(`^\s*case\s+.*\bin\s*$`)
+	reEsac          = regexp.MustCompile(`^\s*esac\b`)
 	reCachePathTest = regexp.MustCompile(`!\s*-[efds]\s+`)
 )
 

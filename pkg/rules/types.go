@@ -43,7 +43,7 @@ type Ideals struct {
 // LineHash is the fallback (exact line content fingerprint, sha256 truncated).
 // At least one of Subject or LineHash MUST be set.
 type Match struct {
-	File     string `json:"file"`     // absolute path, ~ expanded at write-time
+	File     string `json:"file"` // absolute path, ~ expanded at write-time
 	Subject  string `json:"subject,omitempty"`
 	LineHash string `json:"lineHash,omitempty"`
 }
@@ -53,10 +53,10 @@ type Match struct {
 type CustomRule struct {
 	CheckID      string `json:"checkId"`
 	Match        Match  `json:"match"`
-	Action       string `json:"action"`               // "acknowledge"
-	Reason       string `json:"reason,omitempty"`     // free-text, optional
-	ApproxImpact string `json:"approxImpact"`         // snapshotted at creation, refreshed on --fix
-	CreatedAt    string `json:"createdAt"`            // RFC3339
+	Action       string `json:"action"`           // "acknowledge"
+	Reason       string `json:"reason,omitempty"` // free-text, optional
+	ApproxImpact string `json:"approxImpact"`     // snapshotted at creation, refreshed on --fix
+	CreatedAt    string `json:"createdAt"`        // RFC3339
 }
 
 // Custom is the on-disk form of user-confirmed exceptions.

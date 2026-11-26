@@ -19,19 +19,19 @@ type ToolSpec struct {
 // knownTools maps tool name -> init command template.
 // %SHELL% is replaced with the actual shell name.
 var knownTools = map[string]string{
-	"rbenv":       "rbenv init - %SHELL%",
-	"pyenv":       "pyenv init - %SHELL%",
-	"nodenv":      "nodenv init - %SHELL%",
-	"fnm":         "fnm env --use-on-cd --shell %SHELL%",
-	"direnv":      "direnv hook %SHELL%",
-	"oh-my-posh":  "oh-my-posh init %SHELL%",
-	"starship":    "starship init %SHELL%",
-	"zoxide":      "zoxide init %SHELL%",
-	"atuin":       "atuin init %SHELL%",
-	"mcfly":       "mcfly init %SHELL%",
-	"thefuck":     "thefuck --alias",
-	"navi":        "navi widget %SHELL%",
-	"tv":          "tv init %SHELL%",
+	"rbenv":      "rbenv init - %SHELL%",
+	"pyenv":      "pyenv init - %SHELL%",
+	"nodenv":     "nodenv init - %SHELL%",
+	"fnm":        "fnm env --use-on-cd --shell %SHELL%",
+	"direnv":     "direnv hook %SHELL%",
+	"oh-my-posh": "oh-my-posh init %SHELL%",
+	"starship":   "starship init %SHELL%",
+	"zoxide":     "zoxide init %SHELL%",
+	"atuin":      "atuin init %SHELL%",
+	"mcfly":      "mcfly init %SHELL%",
+	"thefuck":    "thefuck --alias",
+	"navi":       "navi widget %SHELL%",
+	"tv":         "tv init %SHELL%",
 }
 
 // KnownToolNames returns all supported tool names (sorted would be nice but
