@@ -99,12 +99,13 @@ func scanShell(lines []string, fish bool) []lineInfo {
 }
 
 func (s *scanner) line(line string) lineInfo {
-	info := lineInfo{Inert: s.inString(), Depth: s.depth(), Continued: s.continued || s.pending, CommentAt: -1}
+	backslash := s.continued // the previous line ended in a backslash
+	info := lineInfo{Inert: s.inString(), Depth: s.depth(), Continued: backslash || s.pending, CommentAt: -1}
 	base := len(s.stack)
 	s.continued = false
 	joins := false // the latest top-level token is &&, || or |
 	code := false  // the line has something other than blanks and a comment
-	if base == 0 && !s.continued {
+	if base == 0 && !backslash { // otherwise the words are still arguments
 		s.cmdPos = true
 	}
 
