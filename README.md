@@ -63,12 +63,25 @@ envset remove --key PATH --value /opt/homebrew/bin --target zshenv
 envset restore --target zshenv --list                # show backups
 envset restore --target zshenv                       # undo the last change
 envset audit                                         # health check, read-only
+envset audit --dry-run                               # plus the diff of every safe fix
 envset audit --fix                                   # review and apply safe fixes
 envset lazy pyenv --write                            # lazy-load a slow tool
 eval "$(envset reload --target zshenv)"              # apply in the current shell
 ```
 
 Run `envset add` or `envset remove` with no flags to start an interactive wizard.
+Prompts go to stderr, so stdout stays clean for `eval`. Without a terminal
+(cron, pipes, `< /dev/null`) or with `--yes`, a missing flag is an error
+instead of a prompt, so envset never hangs in a script.
+
+### Which shell?
+
+envset edits the files of your shell: the nearest zsh, bash or fish in the
+process tree, skipping `sh`, so scripts, cron and IDE tasks still target your
+real shell. If none is found, it uses `$SHELL`, then your macOS account's login
+shell, then zsh. Override it with `--shell zsh|bash|fish` or
+`ENVSET_SHELL`. `~/.gg_system_exports` and `~/.gg_system_interactive` are used
+only on Macs where they exist.
 
 ## Commands
 
@@ -133,8 +146,9 @@ pick the pre-restore backup with `--backup`.
 
 It exits non-zero if it finds errors.
 
-`--fix` shows a diff of the safe fixes (each one comments out a line) and asks
-before applying them; `--fix --yes` applies them without asking. If a file
+`--dry-run` adds a diff of every safe fix (each one comments out a line)
+without prompting or writing. `--fix` walks through the findings one by one and
+needs a terminal; `--fix --yes` applies every safe fix without asking. If a file
 changed since the audit ran, nothing is written. Every fixed file is backed up first.
 
 ### `lazy`
@@ -150,7 +164,7 @@ envset lazy mytool --init-cmd "mytool init zsh"
 
 ### `detect`, `list`, `reload`
 
-- `detect` shows the OS, the current and login shells, and which config files exist.
+- `detect` shows the shell envset places entries for and how it chose it, the shell it is running under, and which of that shell's config files exist.
 - `list --target X [--key K]` shows the entries in a file, including commented-out ones.
 - `reload [--target X]` prints `source` lines for `eval`. A child process can't change its parent shell's environment, so this is how you apply a change to the shell you're in:
 
@@ -219,6 +233,7 @@ The log location is the first of these that is set:
 | Variable | Effect |
 |---|---|
 | `ENVSET_LOG_FILE`, `ENVSET_LOG_DIR` | Log location |
+| `ENVSET_SHELL` | Shell to place entries for (`zsh`, `bash`, `fish`); same as `--shell` |
 | `ENVSET_BACKUP_DIR` | Backup location (default `~/.config/envset/backups`) |
 | `ENVSET_NO_SYNTAX_CHECK=1` | Skip the shell parse check before writing. Not recommended |
 | `XDG_CONFIG_HOME` | Base for the config directory |
@@ -249,6 +264,7 @@ envset/
 │   ├── lazy/         lazy-load wrapper generator
 │   ├── logger/       run log
 │   ├── wizard/       interactive prompts
+│   ├── term/         TTY detection; prompts on stderr
 │   └── ops/          orchestration behind each command
 ├── scripts/comlog-gate.sh
 └── docs/TUTORIAL.md

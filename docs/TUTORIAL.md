@@ -22,18 +22,21 @@ any point to leave; your real environment is untouched. To start over,
 ```console
 $ envset detect
 Detected OS:         darwin
-Current Shell:       zsh (from process tree)
-Login Shell:         zsh (from $SHELL)
+Placing for:         zsh (from process tree)
+Running under:       zsh
+Login shell ($SHELL): zsh
 Home Directory:      ~
-Shell Configs:
+zsh configs:
   .zshrc          ~/.zshrc (missing)
   .zprofile       ~/.zprofile (missing)
   .zshenv         ~/.zshenv (missing)
-  ...
 ```
 
-envset reads your shell from the process tree, so the answer is correct even if
-`$SHELL` says something else.
+"Placing for" is the shell whose files envset edits. envset finds the nearest
+zsh, bash or fish in the process tree. It skips `sh`, so running envset from a
+`#!/bin/sh` script, cron or an IDE task still targets your zsh files. If no
+shell is found, it falls back to `$SHELL`, then to your macOS account's login
+shell. `--shell bash` (or `ENVSET_SHELL=bash`) overrides all of this.
 
 ## 2. Add a variable and let envset pick the file
 
@@ -201,8 +204,9 @@ On a real machine, `audit` finds problems such as:
 - slow `eval "$(pyenv init -)"`-style inits
 - keys defined in several files
 
-`envset audit --fix` previews the safe fixes and applies them only after you
-confirm, with backups.
+`envset audit --dry-run` shows the diff of every safe fix without changing
+anything. `envset audit --fix` walks through the findings and applies the ones
+you accept, with backups.
 
 ## Using it on your real machine
 
