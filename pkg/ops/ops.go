@@ -56,12 +56,12 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 			return fmt.Errorf("--key and --value are required when not running interactively (or with --yes)")
 		}
 		logger.Trace("add: missing required input — entering wizard")
-		var confirmed bool
-		key, value, targetName, varType, confirmed, err = wizard.RunAddWizard(dryRun)
+		answers, err := wizard.RunAddWizard(wizard.Preset{Key: key, Value: value, Target: targetName, Type: varTypeStr, Quote: quote})
 		if err != nil {
 			return fmt.Errorf("wizard error: %w", err)
 		}
-		if !confirmed {
+		key, value, targetName, varType = answers.Key, answers.Value, answers.Target, answers.VarType
+		if !answers.Confirmed {
 			logger.Result("add: aborted by user in wizard")
 			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
@@ -237,7 +237,8 @@ func homeDir() (string, error) {
 //
 // value, when non-empty, restricts removal to entries whose value contains it
 // (required for PATH so one entry can be removed without wiping the others).
-func Remove(key, value, targetName string, comment, dryRun, printSource bool) error {
+// commentSet says whether --comment was given, so the wizard need not ask.
+func Remove(key, value, targetName string, comment, dryRun, printSource, commentSet bool) error {
 	logger.Step("ops.Remove")
 	logger.Input("key=%q value=%q target=%q comment=%v dry_run=%v print_source=%v",
 		key, redact(key, value), targetName, comment, dryRun, printSource)
@@ -254,7 +255,7 @@ func Remove(key, value, targetName string, comment, dryRun, printSource bool) er
 		logger.Trace("remove: missing input — entering wizard")
 		var confirmed bool
 		var err error
-		key, targetName, comment, confirmed, err = wizard.RunRemoveWizard()
+		key, targetName, comment, confirmed, err = wizard.RunRemoveWizard(wizard.Preset{Key: key, Target: targetName, Comment: comment, CommentSet: commentSet})
 		if err != nil {
 			return fmt.Errorf("wizard error: %w", err)
 		}

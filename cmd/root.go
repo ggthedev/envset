@@ -96,7 +96,11 @@ Value encoding:
 		} else if raw {
 			quote = targets.QuoteRaw
 		}
-		return ops.Add(key, value, targetName, varType, quote, dryRun, yes, printSource, appendNew)
+		typed := "" // only a --type the user gave; the wizard asks otherwise
+		if cmd.Flags().Changed("type") {
+			typed = varType
+		}
+		return ops.Add(key, value, targetName, typed, quote, dryRun, yes, printSource, appendNew)
 	},
 }
 
@@ -108,7 +112,7 @@ var removeCmd = &cobra.Command{
 Comments out by default; pass --comment=false to delete the line(s).
 For PATH, --value is required and selects which entry to remove.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return ops.Remove(key, value, targetName, comment, dryRun, printSource)
+		return ops.Remove(key, value, targetName, comment, dryRun, printSource, cmd.Flags().Changed("comment"))
 	},
 }
 

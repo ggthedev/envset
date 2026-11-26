@@ -13,15 +13,77 @@ import (
 	"github.com/experimentalist/envset/pkg/targets"
 )
 
-// RunAddWizard interactively prompts for add operation details.
-// Uses the placer to intelligently suggest the optimal config file.
-func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.VarType, confirmed bool, err error) {
+// Preset holds what the user already gave on the command line. The wizards
+// ask only for what is missing.
+type Preset struct {
+	Key, Value, Target string
+	Type               string // --type as typed; "" when not given
+	Quote              targets.QuoteMode
+	Comment            bool // remove: --comment's value
+	CommentSet         bool // remove: --comment was given
+}
+
+// AddAnswers is the outcome of the add wizard. Confirmed is false when the
+// user quit or declined.
+type AddAnswers struct {
+	Key, Value, Target string
+	VarType            targets.VarType
+	Confirmed          bool
+}
+
+// RunAddWizard prompts for the details of an add that were not preset, and
+// uses the placer to suggest the config file when no target was given.
+func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 	logger.Step("wizard.RunAddWizard")
+
+	ans = AddAnswers{Key: pre.Key, Value: pre.Value, Target: pre.Target}
+	if pre.Type != "" {
+		if ans.VarType, err = targets.VarTypeFromString(pre.Type); err != nil {
+			return
+		}
+	}
+	isPath := func() bool {
+		return ans.VarType == targets.VarTypePathAppend || ans.VarType == targets.VarTypePathPrepend
+	}
+	// A step is skipped when its answer is already known.
+	skip := func(step int) bool {
+		switch step {
+		case 1:
+			return pre.Type != ""
+		case 2:
+			return isPath() || pre.Key != ""
+		default:
+			return pre.Value != ""
+		}
+	}
+	// previous is where "b" goes: the nearest earlier step that asks something.
+	previous := func(step int) int {
+		for s := step - 1; s >= 1; s-- {
+			if !skip(s) {
+				return s
+			}
+		}
+		return step
+	}
+
+	if pre.Key != "" && detector.IsSecret(pre.Key) {
+		ok, qErr := confirmSecret(pre.Key)
+		if qErr != nil || !ok {
+			err = qErr
+			return
+		}
+	}
 
 	var varTypeStr string
 	step := 1
-
 	for step <= 3 {
+		if step == 2 && isPath() {
+			ans.Key = "PATH"
+		}
+		if skip(step) {
+			step++
+			continue
+		}
 		switch step {
 		case 1:
 			varTypeOpts := []string{
@@ -43,92 +105,79 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 				return
 			}
 			if strings.HasPrefix(varTypeStr, "q") {
-				return // confirmed=false: caller prints "Aborted."
+				return // Confirmed=false: caller prints "Aborted."
 			}
 			logger.QA("Var type", varTypeStr)
 
 			switch {
 			case strings.HasPrefix(varTypeStr, "export and"):
-				varType = targets.VarTypeExportAndPathAppend
+				ans.VarType = targets.VarTypeExportAndPathAppend
 			case strings.HasPrefix(varTypeStr, "export"):
-				varType = targets.VarTypeExport
+				ans.VarType = targets.VarTypeExport
 			case strings.HasPrefix(varTypeStr, "eval"):
-				varType = targets.VarTypeEval
+				ans.VarType = targets.VarTypeEval
 			case strings.HasPrefix(varTypeStr, "source"):
-				varType = targets.VarTypeSource
+				ans.VarType = targets.VarTypeSource
 			case strings.HasPrefix(varTypeStr, "path_append"):
-				varType = targets.VarTypePathAppend
+				ans.VarType = targets.VarTypePathAppend
 			case strings.HasPrefix(varTypeStr, "path_prepend"):
-				varType = targets.VarTypePathPrepend
+				ans.VarType = targets.VarTypePathPrepend
 			case strings.HasPrefix(varTypeStr, "fish_set"):
-				varType = targets.VarTypeFishSet
+				ans.VarType = targets.VarTypeFishSet
 			}
 			step++
 
 		case 2:
-			if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
-				key = "PATH"
-				step++
-				continue
-			}
-
 			keyPrompt := &survey.Input{
 				Message: "Variable name (e.g., FOO) [q to quit, b to back]:",
 				Help:    "The environment variable key to set. Type 'q' to quit, 'b' to go back.",
 			}
+			var key string
 			if err = term.Ask(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
 				return
 			}
 			if key == "q" {
-				return // confirmed=false: caller prints "Aborted."
+				return
 			}
 			if key == "b" {
-				step--
+				step = previous(step)
 				continue
 			}
+			ans.Key = key
 			logger.QA("Variable name", key)
 
 			if detector.IsSecret(key) {
-				warn := false
-				warnPrompt := &survey.Confirm{
-					Message: fmt.Sprintf("WARNING: %s looks like a secret/API key. Continue?", key),
-					Default: false,
-				}
-				if err = term.Ask(warnPrompt, &warn); err != nil {
+				ok, qErr := confirmSecret(key)
+				if qErr != nil || !ok {
+					err = qErr
 					return
-				}
-				logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", warn))
-				if !warn {
-					return // confirmed=false: caller prints "Aborted."
 				}
 			}
 			step++
 
 		case 3:
 			valHelp := "The value to assign. For eval, enter the command. For source, enter the file path."
-			if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
+			if isPath() {
 				valHelp = "The path to append/prepend to PATH."
 			}
 			valuePrompt := &survey.Input{
 				Message: "Value [q to quit, b to back]:",
 				Help:    valHelp + " Type 'q' to quit, 'b' to go back.",
 			}
+			var value string
 			if err = term.Ask(valuePrompt, &value, survey.WithValidator(survey.Required)); err != nil {
 				return
 			}
 			if value == "q" {
-				return // confirmed=false: caller prints "Aborted."
+				return
 			}
 			if value == "b" {
-				if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
-					step -= 2 // go back to var type, since we skipped key
-				} else {
-					step--
-				}
+				step = previous(step)
 				continue
 			}
+			ans.Value = value
 			displayVal := value
-			if detector.IsSecret(key) {
+			if detector.IsSecret(ans.Key) {
 				displayVal = "[redacted]"
 			}
 			logger.QA("Value", displayVal)
@@ -136,10 +185,19 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 		}
 	}
 
+	key, value, varType := ans.Key, ans.Value, ans.VarType
+
 	// 4. Detect environment & build placer
 	info, detectErr := detector.Detect()
 	if detectErr != nil {
 		err = fmt.Errorf("could not detect environment: %w", detectErr)
+		return
+	}
+
+	// --target was given: no placement question.
+	if pre.Target != "" {
+		ans.Confirmed = true
+		err = preview(info, ans, pre.Quote)
 		return
 	}
 
@@ -177,9 +235,9 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 			logger.QA("Scope-mismatch resolution",
 				fmt.Sprintf("broken=%s primary=%s chosen=%s",
 					broken.File.Name, primary.Name, name))
-			confirmed = true
-			targetName = name
-			goto preview
+			ans.Confirmed, ans.Target = true, name
+			err = preview(info, ans, pre.Quote)
+			return
 		}
 		logger.Trace("no canonical primary file found for scope %s; falling through", intent.Scope)
 	}
@@ -192,8 +250,7 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 			return
 		}
 		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
-		confirmed = useIt
-		targetName = name
+		ans.Confirmed, ans.Target = useIt, name
 	} else {
 		// Low confidence — ask clarifying questions
 		logger.Trace("top confidence below 0.75; asking clarifying questions")
@@ -218,61 +275,82 @@ func RunAddWizard(dryRun bool) (key, value, targetName string, varType targets.V
 			return
 		}
 		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
-		confirmed = useIt
-		targetName = name
+		ans.Confirmed, ans.Target = useIt, name
 	}
 
-preview:
-
-	// 7. Preview
-	if confirmed && targetName != "" {
-		t, tErr := targets.Factory(targetName, info.HomeDir)
-		if tErr != nil {
-			err = tErr
-			return
-		}
-		preview, _ := t.Preview(key, value, varType, targets.QuoteExpand)
-		fmt.Fprintf(os.Stderr, "\nPreview line:\n  %s\n\n", preview)
+	if ans.Confirmed && ans.Target != "" {
+		err = preview(info, ans, pre.Quote)
 	}
-
 	return
 }
 
-// RunRemoveWizard interactively prompts for remove operation details.
-func RunRemoveWizard() (key, targetName string, commentOut bool, confirmed bool, err error) {
-	logger.Step("wizard.RunRemoveWizard")
-
-	keyPrompt := &survey.Input{
-		Message: "Variable name to remove:",
-		Help:    "The environment variable key to remove.",
-	}
-	if err = term.Ask(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
-		return
-	}
-	logger.QA("Variable name to remove", key)
-
-	// Use placer registry to show all files including custom ones
-	info, dErr := detector.Detect()
-	if dErr != nil {
-		err = dErr
-		return
-	}
-	p := placer.NewPlacer(info)
-	targetName, err = placer.AskTargetPick(p.Registry)
+// preview shows the line that is about to be written.
+func preview(info *detector.Info, ans AddAnswers, quote targets.QuoteMode) error {
+	t, err := targets.Factory(ans.Target, info.HomeDir)
 	if err != nil {
-		return
+		return err
 	}
-	logger.QA("Target file", targetName)
+	// An invalid value is reported by the write itself.
+	if line, err := t.Preview(ans.Key, ans.Value, ans.VarType, quote); err == nil {
+		fmt.Fprintf(os.Stderr, "\nPreview line:\n  %s\n\n", line)
+	}
+	return nil
+}
 
-	commentPrompt := &survey.Confirm{
-		Message: "Comment out instead of deleting?",
-		Default: true,
-		Help:    "Commenting preserves the line but disables it. Deleting removes it permanently.",
+func confirmSecret(key string) (bool, error) {
+	ok := false
+	prompt := &survey.Confirm{
+		Message: fmt.Sprintf("WARNING: %s looks like a secret/API key. Continue?", key),
+		Default: false,
 	}
-	if err = term.Ask(commentPrompt, &commentOut); err != nil {
-		return
+	if err := term.Ask(prompt, &ok); err != nil {
+		return false, err
 	}
-	logger.QA("Comment out instead of delete?", fmt.Sprintf("%v", commentOut))
+	logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", ok))
+	return ok, nil
+}
+
+// RunRemoveWizard interactively prompts for remove operation details.
+func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confirmed bool, err error) {
+	logger.Step("wizard.RunRemoveWizard")
+	key, targetName, commentOut = pre.Key, pre.Target, pre.Comment
+
+	if key == "" {
+		keyPrompt := &survey.Input{
+			Message: "Variable name to remove:",
+			Help:    "The environment variable key to remove.",
+		}
+		if err = term.Ask(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
+			return
+		}
+		logger.QA("Variable name to remove", key)
+	}
+
+	if targetName == "" {
+		// Use placer registry to show all files including custom ones
+		info, dErr := detector.Detect()
+		if dErr != nil {
+			err = dErr
+			return
+		}
+		p := placer.NewPlacer(info)
+		if targetName, err = placer.AskTargetPick(p.Registry); err != nil {
+			return
+		}
+		logger.QA("Target file", targetName)
+	}
+
+	if !pre.CommentSet {
+		commentPrompt := &survey.Confirm{
+			Message: "Comment out instead of deleting?",
+			Default: true,
+			Help:    "Commenting preserves the line but disables it. Deleting removes it permanently.",
+		}
+		if err = term.Ask(commentPrompt, &commentOut); err != nil {
+			return
+		}
+		logger.QA("Comment out instead of delete?", fmt.Sprintf("%v", commentOut))
+	}
 
 	action := "delete"
 	if commentOut {
