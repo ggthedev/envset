@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/experimentalist/envset/pkg/fsutil"
 )
 
 // Environment variables / .env keys recognised by the logger.
@@ -12,7 +14,6 @@ const (
 	EnvLogFile = "ENVSET_LOG_FILE" // explicit absolute file path
 	EnvLogDir  = "ENVSET_LOG_DIR"  // directory; envset.log appended
 
-	defaultDir  = "~/.config/envset/logs"
 	defaultFile = "envset.log"
 )
 
@@ -21,9 +22,12 @@ const (
 // Precedence (first non-empty wins):
 //  1. $ENVSET_LOG_FILE
 //  2. $ENVSET_LOG_DIR  (joined with envset.log)
-//  3. ~/.config/envset/.env  (same keys)
-//  4. ./.env in the current working directory  (same keys)
-//  5. ~/.config/envset/logs/envset.log  (default)
+//  3. <config>/.env  (same keys), where <config> is $XDG_CONFIG_HOME/envset
+//     or ~/.config/envset
+//  4. <config>/logs/envset.log  (default)
+//
+// A .env in the current directory is deliberately NOT consulted: running
+// envset inside some project must not redirect its log.
 //
 // All paths starting with "~/" or "$HOME/" are expanded to the user's home.
 func ResolveLogPath() string {
@@ -37,15 +41,13 @@ func ResolveLogPath() string {
 		return filepath.Join(expandHome(d, home), defaultFile)
 	}
 
-	// 3 & 4: .env files
-	for _, dotenv := range []string{
-		filepath.Join(home, ".config", "envset", ".env"),
-		".env",
-	} {
-		vals, err := readDotEnv(dotenv)
-		if err != nil {
-			continue
-		}
+	cfg, err := fsutil.ConfigDir()
+	if err != nil {
+		cfg = filepath.Join(home, ".config", "envset")
+	}
+
+	// 3: envset's own .env
+	if vals, err := readDotEnv(filepath.Join(cfg, ".env")); err == nil {
 		if p := vals[EnvLogFile]; p != "" {
 			return expandHome(p, home)
 		}
@@ -54,8 +56,8 @@ func ResolveLogPath() string {
 		}
 	}
 
-	// 5: default
-	return filepath.Join(expandHome(defaultDir, home), defaultFile)
+	// 4: default
+	return filepath.Join(cfg, "logs", defaultFile)
 }
 
 func expandHome(p, home string) string {

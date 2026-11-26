@@ -35,17 +35,20 @@ var global *Logger
 // is printed to stderr and subsequent calls become no-ops.
 func Init(verbose bool, argv []string) {
 	path := ResolveLogPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "envset: cannot create log dir %s: %v (logging disabled)\n", filepath.Dir(path), err)
 		global = &Logger{disabled: true}
 		return
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	rotate(path, MaxLogSize, LogGenerations)
+	// The log records commands and file paths: keep it private to the user.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "envset: cannot open log file %s: %v (logging disabled)\n", path, err)
 		global = &Logger{disabled: true}
 		return
 	}
+	_ = f.Chmod(0o600) // tighten logs created by older versions (0644)
 
 	global = &Logger{
 		file:    f,
@@ -179,7 +182,47 @@ func callerInfo(skip int) string {
 func (l *Logger) writeBanner(argv []string) {
 	fmt.Fprintln(l.file, strings.Repeat("=", 80))
 	fmt.Fprintf(l.file, "RUN  %s  pid=%d\n", time.Now().Format(time.RFC3339), os.Getpid())
-	fmt.Fprintf(l.file, "cmd  %s\n", strings.Join(argv, " "))
+	fmt.Fprintf(l.file, "cmd  %s\n", strings.Join(RedactArgs(argv), " "))
 	fmt.Fprintf(l.file, "opts verbose=%v\n", l.verbose)
 	fmt.Fprintln(l.file, strings.Repeat("=", 80))
+}
+
+// RedactArgs returns argv with every --value argument replaced by
+// [redacted]. Values are never written to the banner: the INPUT line logs
+// them separately, already redacted when the key looks like a secret.
+func RedactArgs(argv []string) []string {
+	out := make([]string, len(argv))
+	copy(out, argv)
+	for i := 0; i < len(out); i++ {
+		a := out[i]
+		switch {
+		case a == "--":
+			return out
+		case a == "--value" && i+1 < len(out):
+			out[i+1] = "[redacted]"
+			i++
+		case strings.HasPrefix(a, "--value="):
+			out[i] = "--value=[redacted]"
+		}
+	}
+	return out
+}
+
+// Log rotation: when envset.log exceeds MaxLogSize at startup it becomes
+// envset.log.1 (older generations shift up; the oldest is dropped).
+const (
+	MaxLogSize     = 5 << 20 // 5 MiB
+	LogGenerations = 3
+)
+
+func rotate(path string, maxSize int64, gens int) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() < maxSize {
+		return
+	}
+	os.Remove(fmt.Sprintf("%s.%d", path, gens))
+	for i := gens - 1; i >= 1; i-- {
+		os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+	}
+	os.Rename(path, path+".1")
 }

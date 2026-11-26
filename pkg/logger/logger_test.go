@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ func TestResolveLogPath_Default(t *testing.T) {
 	// Isolate: clear env vars and set HOME to a tempdir
 	t.Setenv(EnvLogFile, "")
 	t.Setenv(EnvLogDir, "")
+	t.Setenv("XDG_CONFIG_HOME", "")
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
@@ -50,6 +52,7 @@ func TestResolveLogPath_EnvLogDirAppendsDefaultName(t *testing.T) {
 func TestResolveLogPath_ConfigDotEnv(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv(EnvLogFile, "")
 	t.Setenv(EnvLogDir, "")
 
@@ -171,4 +174,86 @@ func TestNoOpWhenNotInitialised(t *testing.T) {
 	QA("q", "a")
 	Result("z")
 	Trace("t")
+}
+
+func TestResolveLogPath_XDGAndNoCwdDotEnv(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv(EnvLogFile, "")
+	t.Setenv(EnvLogDir, "")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
+
+	// A project .env in the cwd must not redirect the log.
+	proj := t.TempDir()
+	os.WriteFile(filepath.Join(proj, ".env"), []byte("ENVSET_LOG_DIR=/tmp/hijack\n"), 0o644)
+	wd, _ := os.Getwd()
+	os.Chdir(proj)
+	defer os.Chdir(wd)
+
+	got := ResolveLogPath()
+	want := filepath.Join(tmp, "xdg", "envset", "logs", "envset.log")
+	if got != want {
+		t.Errorf("path = %s, want %s", got, want)
+	}
+}
+
+func TestRedactArgs(t *testing.T) {
+	in := []string{"envset", "add", "--key", "GITHUB_TOKEN", "--value", "ghp_secret", "--value=ghp_two", "--target", "zshenv"}
+	got := strings.Join(RedactArgs(in), " ")
+	if strings.Contains(got, "ghp_") {
+		t.Fatalf("secret leaked: %s", got)
+	}
+	if !strings.Contains(got, "--value [redacted] --value=[redacted] --target zshenv") {
+		t.Fatalf("unexpected: %s", got)
+	}
+	if in[5] != "ghp_secret" {
+		t.Fatal("input slice was modified")
+	}
+}
+
+func TestInitBannerRedactsAndFileIsPrivate(t *testing.T) {
+	tmp := t.TempDir()
+	log := filepath.Join(tmp, "out.log")
+	t.Setenv(EnvLogFile, log)
+	os.WriteFile(log, []byte("old\n"), 0o644) // as created by older versions
+
+	Init(false, []string{"envset", "add", "--key", "FOO_TOKEN", "--value", "s3cr3t"})
+	Close()
+
+	b, _ := os.ReadFile(log)
+	if strings.Contains(string(b), "s3cr3t") {
+		t.Fatalf("banner leaked value:\n%s", b)
+	}
+	fi, _ := os.Stat(log)
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("log mode %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestRotate(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "envset.log")
+	for i, content := range []string{"gen1", "gen2", "gen3", "gen4"} {
+		os.WriteFile(p, []byte(content+strings.Repeat("x", 20)), 0o600)
+		rotate(p, 10, 3)
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("round %d: log not rotated", i)
+		}
+	}
+	// Newest rotated is .1, oldest kept is .3; gen1 was dropped.
+	for gen, want := range map[int]string{1: "gen4", 2: "gen3", 3: "gen2"} {
+		b, _ := os.ReadFile(fmt.Sprintf("%s.%d", p, gen))
+		if !strings.HasPrefix(string(b), want) {
+			t.Errorf(".%d = %q, want %s…", gen, b, want)
+		}
+	}
+	if _, err := os.Stat(p + ".4"); err == nil {
+		t.Error("kept more than 3 generations")
+	}
+	// Small files are left alone.
+	os.WriteFile(p, []byte("tiny"), 0o600)
+	rotate(p, 10, 3)
+	if _, err := os.Stat(p); err != nil {
+		t.Error("small log was rotated")
+	}
 }

@@ -157,3 +157,34 @@ func TestShellFlag(t *testing.T) {
 		t.Fatal("--shell sh accepted")
 	}
 }
+
+func TestSecretsNeverReachTheLog(t *testing.T) {
+	home := t.TempDir()
+	run(t, home, "-v", "add", "--key", "GITHUB_TOKEN", "--value", "ghp_e2e_secret", "--target", "zshenv", "--dry-run")
+	run(t, home, "add", "--key", "MY_API_KEY", "--value=sk_e2e_secret", "--target", "zshenv", "--dry-run")
+	// Even a non-secret-looking key never has its value in the cmd banner.
+	run(t, home, "add", "--key", "PLAIN", "--value", "banner_e2e_value", "--target", "zshenv", "--dry-run")
+
+	logDir := filepath.Join(home, "logs")
+	entries, err := os.ReadDir(logDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no log written: %v", err)
+	}
+	for _, e := range entries {
+		p := filepath.Join(logDir, e.Name())
+		b, _ := os.ReadFile(p)
+		for _, secret := range []string{"ghp_e2e_secret", "sk_e2e_secret"} {
+			if strings.Contains(string(b), secret) {
+				t.Errorf("%s leaked into %s", secret, e.Name())
+			}
+		}
+		for _, ln := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(ln, "cmd ") && strings.Contains(ln, "banner_e2e_value") {
+				t.Errorf("value in cmd banner: %s", ln)
+			}
+		}
+		if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode %v, want 0600", e.Name(), fi.Mode().Perm())
+		}
+	}
+}
