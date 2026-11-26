@@ -3,8 +3,10 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/lazy"
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/ops"
 	"github.com/experimentalist/envset/pkg/targets"
@@ -50,7 +52,7 @@ Subcommands:
   list     List environment variables in a config file
   audit    Audit shell config files for placement & performance issues
   detect   Show detected shell and configuration files
-  reload   Print source commands for one or all config files
+  reload   Print source commands for a config file or your startup files
   restore  Undo the last change to a config file from its backup
   lazy     Generate a lazy-load wrapper for a slow-init tool
 
@@ -109,12 +111,12 @@ For PATH, --value is required and selects which entry to remove.`,
 
 var reloadCmd = &cobra.Command{
 	Use:   "reload",
-	Short: "Print `source <file>` for one or all config files",
-	Long: `Print source commands for the given target (or every existing config file).
-Use with eval to apply changes in your current shell:
+	Short: "Print `source <file>` for a config file or your startup files",
+	Long: `Print source commands for the given target, or for the files your shell reads
+at startup, in load order. Use with eval to apply changes in your current shell:
 
   eval "$(envset reload --target zshenv)"
-  eval "$(envset reload)"            # all existing files
+  eval "$(envset reload)"            # your shell's startup files
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return ops.Reload(targetName)
@@ -144,15 +146,17 @@ var lazyCmd = &cobra.Command{
 	Use:   "lazy <tool>",
 	Short: "Generate a lazy-load wrapper for a slow-init tool",
 	Long: `Generate a shell function that defers tool initialization until first use.
-This eliminates startup cost for tools like pyenv, rbenv, direnv, etc.
+This removes the startup cost of version managers such as pyenv or rbenv.
 
 Examples:
   envset lazy pyenv              # print wrapper to stdout
-  envset lazy direnv --write     # append wrapper to .zshrc
+  envset lazy rbenv --write      # append wrapper to your interactive config
   envset lazy mytool --init-cmd "mytool setup --shell zsh"
 
-Supported tools: rbenv, pyenv, nodenv, fnm, direnv, oh-my-posh, starship,
-zoxide, atuin, mcfly, thefuck, navi, tv.`,
+Supported tools: ` + strings.Join(lazy.KnownToolNames(), ", ") + `.
+
+starship, oh-my-posh, direnv, atuin and mcfly are refused: their init installs
+a prompt or hook, which a lazy wrapper would leave missing.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return ops.Lazy(args[0], lazyInitCmd, lazyWrite)
@@ -230,7 +234,7 @@ func init() {
 	listCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file")
 
 	// reload flags
-	reloadCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (omit for all existing files)")
+	reloadCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (omit for your shell's startup files)")
 
 	// restore flags
 	restoreCmd.Flags().StringVarP(&targetName, "target", "t", "", "Config file to restore (e.g. zshrc, launchd, or a path)")

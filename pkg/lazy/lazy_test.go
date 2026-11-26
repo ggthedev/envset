@@ -1,6 +1,8 @@
 package lazy
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -67,19 +69,19 @@ func TestGeneratePosix(t *testing.T) {
 }
 
 func TestGenerateFish(t *testing.T) {
-	spec := ToolSpec{Name: "direnv", InitCmd: "direnv hook fish", Shell: "fish"}
+	spec := ToolSpec{Name: "pyenv", InitCmd: "pyenv init - fish", Shell: "fish"}
 	out := Generate(spec)
 
-	if !strings.Contains(out, "function direnv") {
+	if !strings.Contains(out, "function pyenv") {
 		t.Error("output should contain fish function declaration")
 	}
-	if !strings.Contains(out, "functions --erase direnv") {
+	if !strings.Contains(out, "functions --erase pyenv") {
 		t.Error("output should erase the function")
 	}
-	if !strings.Contains(out, "(direnv hook fish)") {
-		t.Error("output should contain fish command substitution")
+	if !strings.Contains(out, "pyenv init - fish | source") {
+		t.Error("output should pipe init into source")
 	}
-	if !strings.Contains(out, "direnv $argv") {
+	if !strings.Contains(out, "pyenv $argv") {
 		t.Error("output should pass through arguments")
 	}
 }
@@ -97,5 +99,50 @@ func TestKnownToolNames(t *testing.T) {
 	}
 	if !found {
 		t.Error("pyenv should be in known tools")
+	}
+}
+
+func TestPromptAndHookToolsRefused(t *testing.T) {
+	for _, tool := range []string{"starship", "oh-my-posh", "direnv", "atuin", "mcfly"} {
+		for _, init := range []string{"", tool + " init zsh"} {
+			if _, err := Resolve(tool, "zsh", init); err == nil || !strings.Contains(err.Error(), "can't be lazy-loaded") {
+				t.Errorf("Resolve(%s, init=%q) err = %v", tool, init, err)
+			}
+		}
+	}
+}
+
+func TestResolveRejectsScriptShells(t *testing.T) {
+	if _, err := Resolve("pyenv", "sh", ""); err == nil {
+		t.Fatal("sh accepted")
+	}
+}
+
+// Run each generated wrapper in its real shell: init emits a multi-line script
+// that redefines the tool, and the first call must reach that definition.
+func TestWrappersRunInRealShells(t *testing.T) {
+	inits := map[string]string{
+		"zsh":  `printf '# c\nfaketool() {\n  echo "ready $1"\n}\n'`,
+		"bash": `printf '# c\nfaketool() {\n  echo "ready $1"\n}\n'`,
+		"fish": `printf '# c\nfunction faketool\n  echo "ready $argv"\nend\n'`,
+	}
+	flags := map[string][]string{"zsh": {"-f", "-c"}, "bash": {"--norc", "-c"}, "fish": {"--no-config", "-c"}}
+	for shell, init := range inits {
+		t.Run(shell, func(t *testing.T) {
+			path, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s not installed", shell)
+			}
+			spec, err := Resolve("faketool", shell, init)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(path, append(flags[shell], Generate(spec)+"\nfaketool hi\n")...)
+			cmd.Env = append(os.Environ(), "HOME="+t.TempDir())
+			out, err := cmd.CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != "ready hi" {
+				t.Fatalf("%s: %v: %q", shell, err, out)
+			}
+		})
 	}
 }
