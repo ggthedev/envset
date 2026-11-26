@@ -2,6 +2,8 @@
 /envset
 /envset_test
 /dist/
+# per-branch binaries: output/envset-<branch>
+/output/
 
 # OS / editor noise
 .DS_Store
