@@ -2,6 +2,7 @@ package lazy
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -41,6 +42,8 @@ var notLazyLoadable = map[string]string{
 	"mcfly":      "it hooks history and key bindings",
 }
 
+var toolNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]*$`)
+
 // KnownToolNames returns the supported tool names, sorted.
 func KnownToolNames() []string {
 	names := make([]string, 0, len(knownTools))
@@ -60,6 +63,13 @@ func Resolve(toolName, shell, initCmd string) (ToolSpec, error) {
 	case "zsh", "bash", "fish":
 	default:
 		return ToolSpec{}, fmt.Errorf("cannot generate a lazy wrapper for shell %q (want zsh, bash or fish)", shell)
+	}
+	// The name becomes a function name written into a startup file.
+	if !toolNameRe.MatchString(toolName) {
+		return ToolSpec{}, fmt.Errorf("invalid tool name %q: use letters, digits and _ . + -", toolName)
+	}
+	if strings.ContainsAny(initCmd, "\n\r\x00") {
+		return ToolSpec{}, fmt.Errorf("--init-cmd must be a single line")
 	}
 	if why, ok := notLazyLoadable[toolName]; ok {
 		return ToolSpec{}, fmt.Errorf("%s can't be lazy-loaded: %s, so its init has to run at shell start; keep it in your interactive config as is", toolName, why)

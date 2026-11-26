@@ -146,3 +146,20 @@ func TestWrappersRunInRealShells(t *testing.T) {
 		})
 	}
 }
+
+// The tool name becomes a function name written into a startup file.
+func TestToolNameIsValidated(t *testing.T) {
+	for _, bad := range []string{"x;touch y", "a b", "$(x)", "a\nb", "", "-x", "a/b", "f(){"} {
+		if _, err := Resolve(bad, "zsh", "true"); err == nil {
+			t.Errorf("tool name %q accepted", bad)
+		}
+	}
+	for _, ok := range []string{"pyenv", "g++", "my_tool.v2", "oh-no"} {
+		if _, err := Resolve(ok, "zsh", "true"); err != nil {
+			t.Errorf("tool name %q rejected: %v", ok, err)
+		}
+	}
+	if _, err := Resolve("tool", "zsh", "a\nrm x"); err == nil {
+		t.Error("multi-line init command accepted")
+	}
+}
