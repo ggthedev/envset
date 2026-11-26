@@ -188,3 +188,38 @@ func TestSecretsNeverReachTheLog(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyAuditWritesNoConfig(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export EDITOR=vi\n"), 0o644)
+	for _, args := range [][]string{{"audit"}, {"audit", "--dry-run"}} {
+		r := run(t, home, args...)
+		if r.code != 0 {
+			t.Fatalf("%v: %s", args, r.stderr)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".config", "envset")); !os.IsNotExist(err) {
+			t.Fatalf("%v created ~/.config/envset", args)
+		}
+	}
+}
+
+func TestMalformedCustomRulesWarnButAuditRuns(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".config", "envset")
+	os.MkdirAll(cfg, 0o755)
+	bad := "{ broken"
+	os.WriteFile(filepath.Join(cfg, "custom.json"), []byte(bad), 0o644)
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("compinit\ncompinit\n"), 0o644)
+
+	r := run(t, home, "audit")
+	if !strings.Contains(r.stderr, "custom.json is not valid JSON") {
+		t.Fatalf("no warning: %q", r.stderr)
+	}
+	if !strings.Contains(r.stdout, "compinit") {
+		t.Fatalf("audit did not run: %q", r.stdout)
+	}
+	run(t, home, "audit", "--fix", "--yes")
+	if b, _ := os.ReadFile(filepath.Join(cfg, "custom.json")); string(b) != bad {
+		t.Fatalf("malformed custom.json was overwritten: %q", b)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/experimentalist/envset/pkg/fsutil"
 )
 
 // ConfigFile describes a known configuration file in the registry.
@@ -73,7 +75,7 @@ func (r *Registry) registerDefaults() {
 	if runtime.GOOS == "darwin" {
 		r.add(ConfigFile{
 			Name:     "launchd",
-			Path:     filepath.Join(r.Home, ".config", "envset", "launchd.sh"),
+			Path:     filepath.Join(fsutil.ConfigDirFor(r.Home), "launchd.sh"),
 			Scope:    ScopeSession,
 			Category: CatGeneric,
 			Priority: 1,

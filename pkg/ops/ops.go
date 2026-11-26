@@ -383,11 +383,17 @@ func Audit(fix, dryRun, yes bool) error {
 	p := placer.NewPlacer(info)
 
 	// Load layered rules: ideals (built-in) + custom (user-confirmed).
-	// On first run the files are created in ~/.config/envset/.
-	ideals, custom, err := rules.LoadOrInit(envsetVersion)
+	// Loading never writes; ideals.json/custom.json are only persisted by --fix.
+	loaded, err := rules.Load(envsetVersion)
 	if err != nil {
 		return fmt.Errorf("loading rules: %w", err)
 	}
+	if loaded.CustomWarning != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: %v\n", loaded.CustomWarning)
+		logger.Warn("rules: %v", loaded.CustomWarning)
+	}
+	customBroken = loaded.CustomBroken
+	ideals, custom := loaded.Ideals, loaded.Custom
 	logger.Trace("rules loaded: ideals.checks=%d custom.rules=%d", len(ideals.Checks), len(custom.Rules))
 
 	a := audit.New(p.Registry)
@@ -417,6 +423,9 @@ func Audit(fix, dryRun, yes bool) error {
 	} else if fix {
 		if !yes && !term.Interactive() {
 			return fmt.Errorf("audit --fix needs a terminal for its review; use --yes to apply all fixes non-interactively, or --dry-run to preview")
+		}
+		if err := rules.PersistIdeals(loaded); err != nil {
+			logger.Warn("writing ideals.json: %v", err)
 		}
 		applied, err := runAuditFix(r, &custom, ideals, dryRun, yes)
 		if err != nil {
@@ -496,7 +505,7 @@ func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, er
 	audit.PrintDiff(os.Stdout, ops)
 
 	// Persist any rule-metadata refresh even when no fixes are applied.
-	if err := rules.SaveCustom(*custom); err != nil {
+	if err := saveCustom(*custom); err != nil {
 		logger.Trace("save custom: %v", err)
 	}
 
@@ -531,7 +540,7 @@ func runAuditFixInteractive(r audit.Report, custom *rules.Custom, ideals rules.I
 	}
 	if len(pending) == 0 {
 		fmt.Fprintln(os.Stdout, "Nothing to review.")
-		if err := rules.SaveCustom(*custom); err != nil {
+		if err := saveCustom(*custom); err != nil {
 			logger.Trace("save custom: %v", err)
 		}
 		return false, nil
@@ -575,7 +584,7 @@ reviewLoop:
 	}
 
 	// Persist custom.json regardless (refresh + any new rules).
-	if err := rules.SaveCustom(*custom); err != nil {
+	if err := saveCustom(*custom); err != nil {
 		return false, fmt.Errorf("saving custom rules: %w", err)
 	}
 	if addedRules > 0 {
@@ -604,6 +613,17 @@ reviewLoop:
 	}
 	reportApplied(ops, backups)
 	return true, nil
+}
+
+// customBroken is set by Audit when custom.json could not be parsed: the
+// file is then never overwritten, so the user's rules can be repaired.
+var customBroken bool
+
+func saveCustom(c rules.Custom) error {
+	if customBroken {
+		return fmt.Errorf("not saving custom.json: the existing file is malformed; fix or delete it first")
+	}
+	return rules.SaveCustom(c)
 }
 
 // promptChoice loops until a valid single-letter choice is given.
@@ -643,7 +663,7 @@ func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rule
 	return rules.CustomRule{
 		CheckID: f.CheckID,
 		Match: rules.Match{
-			File:     f.File,
+			File:     rules.PortablePath(f.File),
 			Subject:  f.Subject,
 			LineHash: rules.LineHash(f.Code),
 		},

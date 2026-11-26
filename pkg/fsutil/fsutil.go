@@ -25,6 +25,15 @@ func ConfigDir() (string, error) {
 	return filepath.Join(home, ".config", "envset"), nil
 }
 
+// ConfigDirFor is ConfigDir for an explicit home directory (used where the
+// caller already resolved $HOME, e.g. targets built for a test HOME).
+func ConfigDirFor(home string) string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "envset")
+	}
+	return filepath.Join(home, ".config", "envset")
+}
+
 // ResolvePath follows symlinks so writes land on the real file (e.g. a
 // dotfiles-repo file that ~/.zshrc links to) and the link itself survives.
 // A path that does not exist yet is returned unchanged; a dangling symlink

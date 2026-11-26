@@ -24,7 +24,7 @@ type LaunchdTarget struct {
 
 // NewLaunchdTarget creates a new LaunchdTarget.
 func NewLaunchdTarget(home string) (*LaunchdTarget, error) {
-	path := filepath.Join(home, ".config", "envset", "launchd.sh")
+	path := filepath.Join(fsutil.ConfigDirFor(home), "launchd.sh")
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.envset.environment.plist")
 	return &LaunchdTarget{
 		name:      "launchd",

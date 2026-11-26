@@ -121,6 +121,7 @@ func TestRefreshImpacts(t *testing.T) {
 
 func TestPruneStale(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	existing := filepath.Join(dir, "exists")
 	if err := os.WriteFile(existing, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
@@ -143,5 +144,93 @@ func TestLineHash_Stable(t *testing.T) {
 	b := LineHash(`eval "$(pyenv init - zsh)"`)
 	if a != b {
 		t.Errorf("trim should not affect hash: %s vs %s", a, b)
+	}
+}
+
+func TestPruneStaleKeepsOtherMacsRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	custom := &Custom{Rules: []CustomRule{
+		{CheckID: "a", Match: Match{File: "/Users/someone-else/.zshrc"}}, // other Mac, old absolute form
+		{CheckID: "b", Match: Match{File: "~/.missing_here"}},            // under this HOME, missing
+	}}
+	if n := PruneStale(custom); n != 1 || len(custom.Rules) != 1 || custom.Rules[0].CheckID != "a" {
+		t.Fatalf("pruned %d, left %+v", n, custom.Rules)
+	}
+}
+
+// A rule recorded on one Mac (as ~/…) matches the same file on another Mac
+// with a different home directory.
+func TestPortableRulePathsAcrossHomes(t *testing.T) {
+	cfg := withTempXDG(t)
+	homeA := t.TempDir()
+	t.Setenv("HOME", homeA)
+	rule := CustomRule{CheckID: CheckSlowInteractiveInit, Match: Match{File: PortablePath(filepath.Join(homeA, ".zshrc")), Subject: "pyenv"}}
+	if rule.Match.File != "~/.zshrc" {
+		t.Fatalf("stored as %q, want ~/.zshrc", rule.Match.File)
+	}
+	if err := SaveCustom(Custom{Rules: []CustomRule{rule}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = cfg
+
+	homeB := t.TempDir()
+	t.Setenv("HOME", homeB)
+	l, err := Load("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if FindMatching(l.Custom, CheckSlowInteractiveInit, filepath.Join(homeB, ".zshrc"), "pyenv", "") == nil {
+		t.Fatal("rule from HOME A did not match the same file under HOME B")
+	}
+}
+
+func TestLoadMigratesAbsolutePathsUnderHome(t *testing.T) {
+	cfg := withTempXDG(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(cfg, 0o755)
+	b, _ := json.Marshal(Custom{Version: CurrentVersion, Rules: []CustomRule{{CheckID: "x", Match: Match{File: filepath.Join(home, ".zshrc"), Subject: "s"}}}})
+	os.WriteFile(filepath.Join(cfg, "custom.json"), b, 0o644)
+	l, _ := Load("t")
+	if got := l.Custom.Rules[0].Match.File; got != "~/.zshrc" {
+		t.Fatalf("migrated to %q", got)
+	}
+}
+
+func TestLoadWritesNothing(t *testing.T) {
+	cfg := withTempXDG(t)
+	l, err := Load("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !l.IdealsStale || len(l.Ideals.Checks) == 0 {
+		t.Fatal("expected built-in ideals in memory")
+	}
+	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+		t.Fatalf("Load created %s", cfg)
+	}
+	if err := PersistIdeals(l); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg, "ideals.json")); err != nil {
+		t.Fatal("PersistIdeals did not write ideals.json")
+	}
+}
+
+func TestLoadMalformedCustomIsAWarning(t *testing.T) {
+	cfg := withTempXDG(t)
+	os.MkdirAll(cfg, 0o755)
+	bad := []byte("{ not json")
+	os.WriteFile(filepath.Join(cfg, "custom.json"), bad, 0o644)
+	l, err := Load("t")
+	if err != nil {
+		t.Fatalf("malformed custom.json should not be fatal: %v", err)
+	}
+	if !l.CustomBroken || l.CustomWarning == nil || len(l.Custom.Rules) != 0 {
+		t.Fatalf("got %+v", l)
+	}
+	if got, _ := os.ReadFile(filepath.Join(cfg, "custom.json")); string(got) != string(bad) {
+		t.Fatal("malformed custom.json was modified")
 	}
 }

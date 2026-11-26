@@ -15,16 +15,7 @@ import (
 
 // Dir returns the directory that holds rules files: ~/.config/envset/.
 // Honours $XDG_CONFIG_HOME when set.
-func Dir() (string, error) {
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "envset"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "envset"), nil
-}
+func Dir() (string, error) { return fsutil.ConfigDir() }
 
 // Paths returns the absolute paths of ideals.json and custom.json.
 func Paths() (idealsPath, customPath string, err error) {
@@ -35,47 +26,108 @@ func Paths() (idealsPath, customPath string, err error) {
 	return filepath.Join(d, "ideals.json"), filepath.Join(d, "custom.json"), nil
 }
 
-// LoadOrInit loads both rule files, creating them with sensible defaults if
-// they don't exist. Returns the loaded Ideals and Custom.
-//
-// Behaviour:
-//   - If ideals.json is missing OR has an older Version, it is overwritten with
-//     BuiltinIdeals(envsetVersion). Custom rules are preserved.
-//   - If custom.json is missing, an empty file is created.
+// Loaded is the result of Load: the rules to audit with, plus what (if
+// anything) should be persisted when the user runs `audit --fix`.
+type Loaded struct {
+	Ideals Ideals
+	Custom Custom
+	// IdealsStale is true when ideals.json is missing or out of date; the
+	// in-memory built-in set is used and written only by Persist.
+	IdealsStale bool
+	// CustomWarning is set when custom.json exists but cannot be parsed. The
+	// audit continues without custom rules, and the file must not be
+	// overwritten (CustomBroken) so the user can repair it.
+	CustomWarning error
+	CustomBroken  bool
+}
+
+// Load reads both rule files without writing anything, so a read-only
+// `envset audit` never touches disk. Missing or stale files fall back to
+// built-in defaults; a malformed custom.json becomes a warning, not an error.
+// Rule paths under $HOME are normalised to ~/… so a synced config works on
+// every Mac regardless of username.
+func Load(envsetVersion string) (Loaded, error) {
+	idealsPath, customPath, err := Paths()
+	if err != nil {
+		return Loaded{}, err
+	}
+	var out Loaded
+
+	ideals, err := readIdeals(idealsPath)
+	if err != nil || ideals.Version != CurrentVersion {
+		ideals = BuiltinIdeals(envsetVersion)
+		out.IdealsStale = true
+	}
+	out.Ideals = ideals
+
+	custom, err := readCustom(customPath)
+	switch {
+	case err == nil:
+		for i := range custom.Rules {
+			custom.Rules[i].Match.File = PortablePath(custom.Rules[i].Match.File)
+		}
+	case errors.Is(err, os.ErrNotExist):
+		custom = Custom{Version: CurrentVersion}
+	default:
+		out.CustomWarning = fmt.Errorf("%s is not valid JSON (%v); auditing without your acknowledged rules. Fix or delete the file", fsutil.Tilde(customPath), err)
+		out.CustomBroken = true
+		custom = Custom{Version: CurrentVersion}
+	}
+	out.Custom = custom
+	return out, nil
+}
+
+// PersistIdeals writes ideals.json if Load found it missing or stale.
+func PersistIdeals(l Loaded) error {
+	if !l.IdealsStale {
+		return nil
+	}
+	idealsPath, _, err := Paths()
+	if err != nil {
+		return err
+	}
+	return writeJSON(idealsPath, l.Ideals)
+}
+
+// LoadOrInit loads both rule files and creates or refreshes them on disk.
+// A malformed custom.json is an error here (it is never overwritten).
 func LoadOrInit(envsetVersion string) (Ideals, Custom, error) {
-	dir, err := Dir()
+	l, err := Load(envsetVersion)
 	if err != nil {
 		return Ideals{}, Custom{}, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Ideals{}, Custom{}, fmt.Errorf("creating %s: %w", dir, err)
+	if l.CustomBroken {
+		return Ideals{}, Custom{}, l.CustomWarning
 	}
-
-	idealsPath, customPath, _ := Paths()
-
-	// --- Ideals: refresh on missing or version mismatch. ---
-	builtin := BuiltinIdeals(envsetVersion)
-	ideals, err := readIdeals(idealsPath)
-	if err != nil || ideals.Version != CurrentVersion {
-		ideals = builtin
-		if err := writeJSON(idealsPath, ideals); err != nil {
-			return Ideals{}, Custom{}, fmt.Errorf("writing ideals.json: %w", err)
-		}
+	if err := PersistIdeals(l); err != nil {
+		return Ideals{}, Custom{}, fmt.Errorf("writing ideals.json: %w", err)
 	}
-
-	// --- Custom: create empty file on first run. ---
-	custom, err := readCustom(customPath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return Ideals{}, Custom{}, fmt.Errorf("reading custom.json: %w", err)
-		}
-		custom = Custom{Version: CurrentVersion}
-		if err := writeJSON(customPath, custom); err != nil {
+	_, customPath, _ := Paths()
+	if _, err := os.Stat(customPath); errors.Is(err, os.ErrNotExist) {
+		if err := writeJSON(customPath, l.Custom); err != nil {
 			return Ideals{}, Custom{}, fmt.Errorf("writing custom.json: %w", err)
 		}
 	}
+	return l.Ideals, l.Custom, nil
+}
 
-	return ideals, custom, nil
+// PortablePath stores a path under $HOME as ~/…, so rules written on one Mac
+// match the same file on another Mac with a different username.
+func PortablePath(p string) string {
+	if p == "" || strings.HasPrefix(p, "~") {
+		return p
+	}
+	return fsutil.Tilde(p)
+}
+
+// ExpandPath turns a ~/… rule path back into an absolute path for this Mac.
+func ExpandPath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			return home + p[1:]
+		}
+	}
+	return p
 }
 
 // SaveCustom writes the custom rules atomically to ~/.config/envset/custom.json.
@@ -95,7 +147,7 @@ func SaveCustom(c Custom) error {
 func FindMatching(c Custom, checkID, file, subject, lineHash string) *CustomRule {
 	for k := range c.Rules {
 		r := &c.Rules[k]
-		if r.CheckID != checkID || r.Match.File != file {
+		if r.CheckID != checkID || ExpandPath(r.Match.File) != ExpandPath(file) {
 			continue
 		}
 		if r.Match.Subject != "" && r.Match.Subject == subject {
@@ -134,17 +186,23 @@ func RefreshImpacts(custom *Custom, ideals Ideals) bool {
 	return changed
 }
 
-// PruneStale removes custom rules whose target file no longer exists on disk.
+// PruneStale removes custom rules whose file is under this Mac's $HOME and
+// no longer exists. Rules for paths outside $HOME (e.g. written on another
+// Mac with a different username, before paths were stored as ~/…) are kept,
+// so syncing the config between Macs never erases the other Mac's rules.
 // Returns the number pruned.
 func PruneStale(custom *Custom) int {
+	home, _ := os.UserHomeDir()
 	out := custom.Rules[:0]
 	pruned := 0
 	for _, r := range custom.Rules {
-		if r.Match.File == "" {
+		p := ExpandPath(r.Match.File)
+		underHome := home != "" && strings.HasPrefix(p, home+"/")
+		if p == "" || !underHome {
 			out = append(out, r)
 			continue
 		}
-		if _, err := os.Stat(r.Match.File); err == nil {
+		if _, err := os.Stat(p); err == nil {
 			out = append(out, r)
 		} else {
 			pruned++
@@ -183,6 +241,9 @@ func readCustom(path string) (Custom, error) {
 func writeJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return fsutil.WriteFileAtomic(path, b, 0o644)
