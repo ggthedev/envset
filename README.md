@@ -151,6 +151,13 @@ without prompting or writing. `--fix` walks through the findings one by one and
 needs a terminal; `--fix --yes` applies every safe fix without asking. If a file
 changed since the audit ran, nothing is written. Every fixed file is backed up first.
 
+`audit` and `audit --dry-run` never write anything. `~/.config/envset/ideals.json`
+and `custom.json` (the findings you chose to acknowledge during `--fix`) are
+written only by `--fix`.
+- A malformed `custom.json` gives a warning, and the audit runs without it; the file is never overwritten.
+- Rule paths are stored as `~/…`, so you can sync `~/.config/envset` between Macs.
+  `--fix` only forgets a rule when its file is missing under this Mac's home.
+
 ### `lazy`
 
 Prints, or with `--write` appends once, a wrapper function that delays a slow
