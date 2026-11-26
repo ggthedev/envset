@@ -81,24 +81,20 @@ func (r *Registry) registerDefaults() {
 	}
 }
 
+// registerCustomFiles adds the user's cross-shell files (~/.gg_system_*).
+// They are only registered when they exist on this Mac, so the placer never
+// suggests a file that nothing sources.
 func (r *Registry) registerCustomFiles() {
-	// User's cross-shell common files
-	r.add(ConfigFile{
-		Name:     "gg_system_exports",
-		Path:     filepath.Join(r.Home, ".gg_system_exports"),
-		Scope:    ScopeAllSessions,
-		Category: CatGeneric,
-		Custom:   true,
-		Priority: 1,
-	})
-	r.add(ConfigFile{
-		Name:     "gg_system_interactive",
-		Path:     filepath.Join(r.Home, ".gg_system_interactive"),
-		Scope:    ScopeInteractive,
-		Category: CatGeneric,
-		Custom:   true,
-		Priority: 1,
-	})
+	for _, f := range []ConfigFile{
+		{Name: "gg_system_exports", Path: filepath.Join(r.Home, ".gg_system_exports"), Scope: ScopeAllSessions},
+		{Name: "gg_system_interactive", Path: filepath.Join(r.Home, ".gg_system_interactive"), Scope: ScopeInteractive},
+	} {
+		if _, err := os.Stat(f.Path); err != nil {
+			continue
+		}
+		f.Category, f.Custom, f.Priority = CatGeneric, true, 1
+		r.add(f)
+	}
 }
 
 func (r *Registry) add(f ConfigFile) {

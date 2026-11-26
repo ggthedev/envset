@@ -1,19 +1,31 @@
 package detector
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Info holds detected environment information.
 type Info struct {
-	OS           string
-	Shell        string // current running shell (from process tree)
-	LoginShell   string // login shell (from $SHELL)
+	OS string
+	// Shell is the user's shell: the one envset places entries for. It is
+	// always zsh, bash or fish, never a script interpreter like sh.
+	Shell string
+	// ShellSource says how Shell was chosen (flag, $ENVSET_SHELL, process
+	// tree, $SHELL, directory service, default).
+	ShellSource string
+	// RunningShell is the nearest shell in the process tree, which may be
+	// sh/dash under cron, IDE tasks or #!/bin/sh scripts. Informational only.
+	RunningShell string
+	LoginShell   string // basename of $SHELL ("unknown" if unset)
 	HomeDir      string
 	ShellConfigs []ShellConfig
 }
@@ -27,31 +39,81 @@ type ShellConfig struct {
 	Priority int // lower = higher priority for suggestions
 }
 
+// override is set by the global --shell flag.
+var override string
+
+// SupportedShells are the shells envset can place entries for.
+var SupportedShells = []string{"zsh", "bash", "fish"}
+
+func isSupported(s string) bool {
+	for _, x := range SupportedShells {
+		if s == x {
+			return true
+		}
+	}
+	return false
+}
+
+// SetShellOverride forces the user shell (from --shell). Empty clears it.
+func SetShellOverride(shell string) error {
+	if shell != "" && !isSupported(shell) {
+		return fmt.Errorf("unsupported shell %q (want one of %s)", shell, strings.Join(SupportedShells, ", "))
+	}
+	override = shell
+	return nil
+}
+
 // Detect gathers environment information.
 func Detect() (*Info, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("could not determine home directory: %w", err)
+	if err != nil || home == "" {
+		return nil, fmt.Errorf("could not determine home directory (is $HOME set?): %v", err)
 	}
 
-	loginShell := detectLoginShell()
-	currentShell := detectCurrentShell()
-
-	// Prefer current shell for suggestions; fallback to login shell.
-	shell := currentShell
-	if shell == "" || shell == "unknown" {
-		shell = loginShell
+	tree := shellsInTree(os.Getppid(), procInfo)
+	shell, source := resolveUserShell(override, os.Getenv("ENVSET_SHELL"), tree, os.Getenv("SHELL"), dsclShell)
+	running := ""
+	if len(tree) > 0 {
+		running = tree[0]
 	}
-
-	configs := detectShellConfigs(home)
 
 	return &Info{
 		OS:           runtime.GOOS,
 		Shell:        shell,
-		LoginShell:   loginShell,
+		ShellSource:  source,
+		RunningShell: running,
+		LoginShell:   detectLoginShell(),
 		HomeDir:      home,
-		ShellConfigs: configs,
+		ShellConfigs: detectShellConfigs(home),
 	}, nil
+}
+
+// resolveUserShell picks the shell to place entries for, in priority order:
+// --shell, $ENVSET_SHELL, the nearest zsh/bash/fish in the process tree,
+// $SHELL, the directory service's UserShell, and finally zsh (the macOS
+// default). sh/dash/ksh/csh are skipped wherever they appear: they mean
+// "a script is running", not "this is the user's shell".
+func resolveUserShell(flag, envOverride string, tree []string, shellEnv string, dscl func() string) (shell, source string) {
+	if flag != "" {
+		return flag, "--shell flag"
+	}
+	if s := filepath.Base(strings.TrimSpace(envOverride)); isSupported(s) {
+		return s, "$ENVSET_SHELL"
+	}
+	for _, s := range tree {
+		if isSupported(s) {
+			return s, "process tree"
+		}
+	}
+	if s := filepath.Base(shellEnv); isSupported(s) {
+		return s, "$SHELL"
+	}
+	if dscl != nil {
+		if s := filepath.Base(dscl()); isSupported(s) {
+			return s, "directory service"
+		}
+	}
+	return "zsh", "default"
 }
 
 // detectLoginShell determines the login shell from $SHELL env var.
@@ -63,64 +125,98 @@ func detectLoginShell() string {
 	return filepath.Base(shell)
 }
 
-// detectCurrentShell walks the parent process tree to find the actual
-// shell process you're currently running in (e.g., bash launched from zsh).
-func detectCurrentShell() string {
-	knownShells := map[string]bool{
-		"zsh": true, "bash": true, "fish": true, "sh": true,
-		"csh": true, "tcsh": true, "ksh": true, "dash": true,
-	}
+var knownShells = map[string]bool{
+	"zsh": true, "bash": true, "fish": true, "sh": true,
+	"csh": true, "tcsh": true, "ksh": true, "dash": true,
+}
 
-	pid := os.Getppid()
-	visited := make(map[int]bool)
+// procInfo returns (ppid, command) for a pid. Replaceable in tests.
+var procInfo = psProcInfo
 
-	for pid > 1 && !visited[pid] {
+// shellsInTree walks up from pid and returns every known shell it passes,
+// nearest first.
+func shellsInTree(pid int, info func(int) (int, string, error)) []string {
+	var out []string
+	visited := map[int]bool{}
+	for i := 0; pid > 1 && !visited[pid] && i < 64; i++ {
 		visited[pid] = true
-		comm, ppid, err := getProcessInfo(pid)
+		ppid, comm, err := info(pid)
 		if err != nil {
 			break
 		}
-		name := filepath.Base(strings.TrimSpace(comm))
-		if knownShells[name] {
-			return name
-		}
-		// Skip common intermediaries (e.g., go run, script, sshd, tmux, screen)
-		skip := map[string]bool{"go": true, "script": true, "sshd": true,
-			"tmux": true, "screen": true, "login": true, "sudo": true,
-			"su": true, "launchd": true, "init": true}
-		if !skip[name] && name != "" {
-			// If we hit a non-shell, non-intermediary process, stop traversing
-			// unless it's a terminal emulator (keep going).
-			termEmulators := map[string]bool{
-				" Terminal": true, "iTerm2": true, "kitty": true,
-				"alacritty": true, "warp": true, "wezterm": true,
-			}
-			if !termEmulators[name] {
-				// Could be a command run from shell; continue one more level
-			}
+		if name := shellName(comm); knownShells[name] {
+			out = append(out, name)
 		}
 		pid = ppid
 	}
-
-	return ""
+	return out
 }
 
-// getProcessInfo returns the command name and parent PID for a given PID.
-// Uses ps which is available on both macOS and Linux.
-func getProcessInfo(pid int) (string, int, error) {
-	cmd := exec.Command("ps", "-o", "comm=", "-o", "ppid=", "-p", fmt.Sprintf("%d", pid))
-	out, err := cmd.Output()
+// shellName normalises a ps comm value: "-zsh" (login shell) -> "zsh",
+// "/bin/bash" -> "bash".
+func shellName(comm string) string {
+	return strings.TrimPrefix(filepath.Base(strings.TrimSpace(comm)), "-")
+}
+
+func psProcInfo(pid int) (int, string, error) {
+	out, err := exec.Command(sysBin("ps", "/bin/ps"), "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
-		return "", 0, err
+		return 0, "", err
 	}
-	parts := strings.Fields(string(out))
-	if len(parts) < 2 {
-		return "", 0, fmt.Errorf("unexpected ps output")
+	return parsePSLine(string(out))
+}
+
+// parsePSLine parses "  <ppid> <command…>". The command is everything after
+// the first field, so paths with spaces (".../Visual Studio Code.app/...")
+// survive intact.
+func parsePSLine(line string) (int, string, error) {
+	line = strings.TrimSpace(line)
+	i := strings.IndexAny(line, " \t")
+	if i < 0 {
+		return 0, "", fmt.Errorf("unexpected ps output %q", line)
 	}
-	comm := parts[0]
-	ppid := 0
-	fmt.Sscanf(parts[1], "%d", &ppid)
-	return comm, ppid, nil
+	ppid, err := strconv.Atoi(line[:i])
+	if err != nil {
+		return 0, "", fmt.Errorf("unexpected ps output %q", line)
+	}
+	return ppid, strings.TrimSpace(line[i:]), nil
+}
+
+// sysBin prefers the fixed system path so lookups work with an empty $PATH
+// (cron, launchd, env -i), falling back to a $PATH search.
+func sysBin(name, abs string) string {
+	if _, err := os.Stat(abs); err == nil {
+		return abs
+	}
+	return name
+}
+
+// dsclShell asks the macOS directory service for the user's login shell,
+// which is right even when $SHELL is unset (cron, launchd, env -i).
+func dsclShell() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
+	u := os.Getenv("USER")
+	if u == "" {
+		if cu, err := user.Current(); err == nil {
+			u = cu.Username
+		}
+	}
+	if u == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, sysBin("dscl", "/usr/bin/dscl"), ".", "-read", "/Users/"+u, "UserShell").Output()
+	if err != nil {
+		return ""
+	}
+	// "UserShell: /bin/zsh"
+	if f := strings.Fields(string(out)); len(f) == 2 {
+		return f[1]
+	}
+	return ""
 }
 
 func detectShellConfigs(home string) []ShellConfig {

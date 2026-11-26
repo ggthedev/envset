@@ -316,20 +316,32 @@ func Detect() error {
 	if err != nil {
 		return err
 	}
-	logger.Trace("detector: os=%s shell=%s login_shell=%s", info.OS, info.Shell, info.LoginShell)
-	logger.Result("detect: shell=%s login_shell=%s configs=%d", info.Shell, info.LoginShell, len(info.ShellConfigs))
+	logger.Trace("detector: os=%s shell=%s source=%q running=%s login_shell=%s",
+		info.OS, info.Shell, info.ShellSource, info.RunningShell, info.LoginShell)
+	logger.Result("detect: shell=%s running=%s configs=%d", info.Shell, info.RunningShell, len(info.ShellConfigs))
 
+	running := info.RunningShell
+	if running == "" {
+		running = "none (not started from a shell)"
+	}
 	fmt.Printf("Detected OS:         %s\n", info.OS)
-	fmt.Printf("Current Shell:       %s (from process tree)\n", info.Shell)
-	fmt.Printf("Login Shell:         %s (from $SHELL)\n", info.LoginShell)
-	fmt.Printf("Home Directory:      %s\n", info.HomeDir)
-	fmt.Println("Shell Configs:")
+	fmt.Printf("Placing for:         %s (from %s)\n", info.Shell, info.ShellSource)
+	fmt.Printf("Running under:       %s\n", running)
+	fmt.Printf("Login shell ($SHELL): %s\n", info.LoginShell)
+	fmt.Printf("Home Directory:      %s\n", fsutil.Tilde(info.HomeDir))
+	fmt.Printf("%s configs:\n", info.Shell)
 	for _, c := range info.ShellConfigs {
+		if c.Shell != info.Shell {
+			continue
+		}
 		status := "missing"
 		if c.Exists {
 			status = "exists"
 		}
-		fmt.Printf("  %-15s %s (%s)\n", c.Name, c.Path, status)
+		fmt.Printf("  %-15s %s (%s)\n", c.Name, fsutil.Tilde(c.Path), status)
+	}
+	if info.Shell != "" && info.RunningShell != "" && info.RunningShell != info.Shell {
+		fmt.Printf("Note: running under %s, but placing for %s. Use --shell to change.\n", info.RunningShell, info.Shell)
 	}
 
 	if suggested := info.SuggestConfig(); suggested != nil {

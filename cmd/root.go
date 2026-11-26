@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/experimentalist/envset/pkg/detector"
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/ops"
 	"github.com/experimentalist/envset/pkg/targets"
@@ -33,6 +34,8 @@ var (
 
 	restoreList   bool
 	restoreBackup string
+
+	shellFlag string
 )
 
 var rootCmd = &cobra.Command{
@@ -58,9 +61,10 @@ Every write is atomic and preceded by a backup in ~/.config/envset/backups.
 	SilenceErrors: true,
 
 	// Open the audit log before any subcommand runs.
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		logger.Init(verbose, os.Args)
 		logger.Step("command:" + cmd.Name())
+		return detector.SetShellOverride(shellFlag)
 	},
 }
 
@@ -129,7 +133,8 @@ var listCmd = &cobra.Command{
 var detectCmd = &cobra.Command{
 	Use:   "detect",
 	Short: "Detect environment",
-	Long:  `Show detected OS, shell, and configuration files.`,
+	Long: `Show the detected OS, the shell envset places entries for (and how it was
+chosen), the shell it is running under, and that shell's configuration files.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return ops.Detect()
 	},
@@ -174,7 +179,7 @@ itself be undone with --backup.`,
 var auditCmd = &cobra.Command{
 	Use:   "audit",
 	Short: "Audit shell config files for placement & performance issues",
-	Long: `Scan every known shell config file (standard + custom ~/.gg_system_*) and
+	Long: `Scan every known shell config file for your shell (plus ~/.gg_system_* when present) and
 report:
   - broken syntax (e.g. PATH assignments that silently corrupt $PATH)
   - PATH/exports placed in interactive-only files
@@ -195,6 +200,7 @@ func init() {
 	// add flags
 	// Persistent flags (apply to every subcommand)
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Trace flow of control to log file and mirror to stderr")
+	rootCmd.PersistentFlags().StringVar(&shellFlag, "shell", "", "Place entries for this shell (zsh, bash, fish) instead of auto-detecting; also $ENVSET_SHELL")
 
 	addCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name")
 	addCmd.Flags().StringVar(&value, "value", "", "Variable value")

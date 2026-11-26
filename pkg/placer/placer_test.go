@@ -255,3 +255,28 @@ func TestPlacerDuplicateLocations(t *testing.T) {
 		}
 	}
 }
+
+// Placement must not depend on the shell envset happens to run under: the
+// registry for a zsh user always contains the zsh files.
+func TestRegistrySkipsMissingCustomFiles(t *testing.T) {
+	home := t.TempDir()
+	reg := NewRegistry(home, "zsh")
+	for _, n := range []string{"gg_system_exports", "gg_system_interactive"} {
+		if _, err := reg.FindByName(n); err == nil {
+			t.Errorf("%s registered although missing", n)
+		}
+	}
+	if _, err := reg.FindByName("zshenv"); err != nil {
+		t.Error("zshenv missing from zsh registry")
+	}
+}
+
+func TestPlacePATHFromShScriptContext(t *testing.T) {
+	home := t.TempDir()
+	// Detector resolves the user shell to zsh even when running under sh.
+	info := &detector.Info{OS: "darwin", Shell: "zsh", RunningShell: "sh", LoginShell: "sh", HomeDir: home}
+	pls := NewPlacer(info).Analyze(DetectIntent("PATH", "/opt/x/bin", targets.VarTypePathAppend))
+	if len(pls) == 0 || pls[0].File.Name != "zshenv" {
+		t.Fatalf("PATH placed in %v, want zshenv", pls)
+	}
+}

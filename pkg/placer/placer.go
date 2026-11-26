@@ -36,14 +36,12 @@ type Placer struct {
 	Registry *Registry
 }
 
-// NewPlacer creates a placer from detected environment info.
+// NewPlacer creates a placer from detected environment info. Files are
+// registered for the user's shell (info.Shell), never the running one, so a
+// #!/bin/sh script or cron job still places into .zshenv/.bash_profile.
 func NewPlacer(info *detector.Info) *Placer {
-	shell := info.Shell
-	if shell == "" || shell == "unknown" {
-		shell = info.LoginShell
-	}
 	return &Placer{
-		Registry: NewRegistry(info.HomeDir, shell),
+		Registry: NewRegistry(info.HomeDir, info.Shell),
 	}
 }
 
