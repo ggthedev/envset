@@ -2,7 +2,6 @@ package targets
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -14,10 +13,10 @@ const (
 	VarTypeExport              VarType = "export"
 	VarTypeExportAndPathAppend VarType = "export_and_path_append"
 	VarTypeEval                VarType = "eval"
-	VarTypeSource     VarType = "source"
-	VarTypePathAppend VarType = "path_append"
-	VarTypePathPrepend VarType = "path_prepend"
-	VarTypeFishSet    VarType = "fish_set" // set -x for fish
+	VarTypeSource              VarType = "source"
+	VarTypePathAppend          VarType = "path_append"
+	VarTypePathPrepend         VarType = "path_prepend"
+	VarTypeFishSet             VarType = "fish_set" // set -x for fish
 )
 
 // Entry represents a single line entry in a config file.
@@ -30,20 +29,57 @@ type Entry struct {
 	IsComment bool
 }
 
+// WriteOptions controls Add.
+type WriteOptions struct {
+	DryRun bool      // compute the change but do not write
+	Quote  QuoteMode // how the value is encoded (default: QuoteExpand)
+}
+
+// RemoveOptions controls Remove.
+type RemoveOptions struct {
+	Comment bool   // comment the line(s) out instead of deleting them
+	DryRun  bool   // compute the change but do not write
+	Value   string // only match entries whose value contains this (required for PATH)
+}
+
+// AddOutcome says what Add did (or would do, in dry-run).
+type AddOutcome string
+
+const (
+	Appended  AddOutcome = "appended"  // new line(s) added at the end
+	Updated   AddOutcome = "updated"   // an existing definition was replaced in place
+	Unchanged AddOutcome = "unchanged" // identical definition already present; nothing written
+)
+
+// AddResult describes the change made by Add.
+type AddResult struct {
+	Outcome  AddOutcome
+	Lines    []string // the line(s) written
+	LineNum  int      // for Updated: 1-indexed line that was replaced
+	Previous string   // for Updated: the line that was replaced
+	Backup   string   // backup of the previous file contents ("" if none / dry-run)
+}
+
+// RemoveResult describes the change made by Remove.
+type RemoveResult struct {
+	Affected []Entry // lines deleted or commented out
+	Skipped  int     // matching lines that were already commented out (comment mode)
+	Backup   string  // backup of the previous file contents ("" if none / dry-run)
+}
+
 // Target defines the interface for configuration file targets.
-// TBD/FUTURE: dotenv, launchd, IDE configs.
 type Target interface {
 	Name() string
 	Path() string
 	Exists() bool
-	// Add inserts a new entry. dryRun controls whether to write.
-	Add(key string, value string, varType VarType, dryRun bool) error
-	// Remove deletes an entry by key. If comment is true, it comments out instead.
-	Remove(key string, comment bool, dryRun bool) error
+	// Add inserts or updates an entry. Adding an identical entry is a no-op.
+	Add(key string, value string, varType VarType, opts WriteOptions) (AddResult, error)
+	// Remove deletes (or comments out) the entries for key.
+	Remove(key string, opts RemoveOptions) (RemoveResult, error)
 	// List returns all entries matching the given key (empty means all).
 	List(key string) ([]Entry, error)
-	// Preview returns what would be written.
-	Preview(key string, value string, varType VarType) (string, error)
+	// Preview returns what would be written (may span several lines).
+	Preview(key string, value string, varType VarType, quote QuoteMode) (string, error)
 }
 
 // Factory returns a Target by name.
@@ -66,17 +102,13 @@ func Factory(name string, home string) (Target, error) {
 			if strings.HasSuffix(path, "config.fish") || strings.HasSuffix(path, ".fish") {
 				shell = "fish"
 			}
-			_, err := os.Stat(path)
-			exists := err == nil
 			return &ShellTarget{
-				name:   filepath.Base(path),
-				path:   path,
-				shell:  shell,
-				exists: exists,
+				name:  filepath.Base(path),
+				path:  path,
+				shell: shell,
 			}, nil
 		}
-		// TBD/FUTURE: dotenv, launchd, IDE configs not yet implemented
-		return nil, fmt.Errorf("unknown target %q (TBD: dotenv, launchd, IDE configs not yet implemented)", name)
+		return nil, fmt.Errorf("unknown target %q (known: %s, launchd, or a file path)", name, strings.Join(AllShellTargets(), ", "))
 	}
 }
 

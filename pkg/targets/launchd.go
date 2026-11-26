@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/experimentalist/envset/pkg/fsutil"
 )
 
 // LaunchdTarget manages macOS launchd environment variable settings.
@@ -39,131 +41,156 @@ func (l *LaunchdTarget) Exists() bool {
 	return err == nil
 }
 
+// runLaunchctl executes launchctl; tests replace it so they never touch the
+// live login session.
+var runLaunchctl = func(args ...string) error {
+	return exec.Command("launchctl", args...).Run()
+}
+
 // Preview returns the command string that would be written to launchd.sh.
-func (l *LaunchdTarget) Preview(key string, value string, varType VarType) (string, error) {
-	escapedVal := strings.ReplaceAll(value, "\"", "\\\"")
+func (l *LaunchdTarget) Preview(key string, value string, varType VarType, quote QuoteMode) (string, error) {
 	switch varType {
-	case VarTypePathAppend:
-		return fmt.Sprintf("launchctl setenv PATH \"$PATH:%s\"", escapedVal), nil
-	case VarTypePathPrepend:
-		return fmt.Sprintf("launchctl setenv PATH \"%s:$PATH\"", escapedVal), nil
+	case VarTypePathAppend, VarTypePathPrepend:
+		v, err := encodePosixPathElem(value, quote)
+		if err != nil {
+			return "", err
+		}
+		if varType == VarTypePathAppend {
+			return fmt.Sprintf(`launchctl setenv PATH "$PATH:%s"`, v), nil
+		}
+		return fmt.Sprintf(`launchctl setenv PATH "%s:$PATH"`, v), nil
+	case VarTypeEval, VarTypeSource, VarTypeFishSet:
+		return "", fmt.Errorf("type %s is not supported for launchd", varType)
 	default:
-		return fmt.Sprintf("launchctl setenv %s \"%s\"", key, escapedVal), nil
+		if err := ValidateKey(key); err != nil {
+			return "", err
+		}
+		v, err := encodePosix(value, quote, true)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("launchctl setenv %s %s", key, v), nil
 	}
+}
+
+func launchdPrefixes(key string) (active, commented string) {
+	return fmt.Sprintf("launchctl setenv %s ", key), fmt.Sprintf("# envset: launchctl setenv %s ", key)
 }
 
 // Add appends or updates an environment variable in launchd.sh and active session.
-func (l *LaunchdTarget) Add(key string, value string, varType VarType, dryRun bool) error {
-	newLine, err := l.Preview(key, value, varType)
+func (l *LaunchdTarget) Add(key string, value string, varType VarType, opts WriteOptions) (AddResult, error) {
+	newLine, err := l.Preview(key, value, varType, opts.Quote)
 	if err != nil {
-		return err
+		return AddResult{}, err
+	}
+	res := AddResult{Lines: []string{newLine}}
+
+	tf, err := readTextFile(l.path)
+	if err != nil {
+		return res, err
+	}
+	if !tf.existed {
+		tf.lines = []string{"#!/bin/sh"}
+		tf.trailingNL = true
 	}
 
-	if dryRun {
-		fmt.Printf("[DRY-RUN] Would append/update in %s:\n%s\n", l.path, newLine)
-		return nil
+	prefix, commentPrefix := launchdPrefixes(key)
+	if varType == VarTypePathAppend || varType == VarTypePathPrepend {
+		prefix, commentPrefix = launchdPrefixes("PATH")
 	}
-
-	// 1. Ensure directories exist
-	if err := os.MkdirAll(filepath.Dir(l.path), 0755); err != nil {
-		return fmt.Errorf("creating directory for script: %w", err)
-	}
-
-	// 2. Read lines of script
-	var lines []string
-	if l.Exists() {
-		lines, err = readLines(l.path)
-		if err != nil {
-			return fmt.Errorf("reading launchd script: %w", err)
-		}
-	} else {
-		lines = []string{"#!/bin/sh"}
-	}
-
-	// 3. Find and replace or append
-	found := false
-	prefix := fmt.Sprintf("launchctl setenv %s ", key)
-	commentPrefix := fmt.Sprintf("# envset: launchctl setenv %s ", key)
-
-	for i, ln := range lines {
+	res.Outcome = Appended
+	for i, ln := range tf.lines {
 		trimmed := strings.TrimSpace(ln)
 		if strings.HasPrefix(trimmed, prefix) || strings.HasPrefix(trimmed, commentPrefix) {
-			// Keep indentation if any
-			indent := ln[:len(ln)-len(strings.TrimLeft(ln, " \t"))]
-			lines[i] = indent + newLine
-			found = true
+			if trimmed == newLine {
+				res.Outcome = Unchanged
+			} else {
+				res.Outcome = Updated
+				res.LineNum = i + 1
+				res.Previous = ln
+				tf.lines[i] = leadingWS(ln) + newLine
+			}
 			break
 		}
 	}
-
-	if !found {
-		lines = append(lines, newLine)
+	if res.Outcome == Appended {
+		tf.appendLines(newLine)
+	}
+	if res.Outcome == Unchanged || opts.DryRun {
+		return res, nil
 	}
 
-	// 4. Write script back
-	if err := writeLines(l.path, lines); err != nil {
-		return fmt.Errorf("writing launchd script: %w", err)
+	res.Backup, err = CommitFile(l.path, "sh", tf.raw, tf.existed, tf.bytes(), 0o755)
+	if err != nil {
+		return res, fmt.Errorf("writing launchd script: %w", err)
 	}
-	_ = os.Chmod(l.path, 0755) // Ensure executable
-
-	// 5. Ensure plist exists
 	if err := l.ensurePlist(); err != nil {
-		return fmt.Errorf("creating launchd plist agent: %w", err)
+		return res, fmt.Errorf("creating launchd plist agent: %w", err)
 	}
-
-	// 6. Apply to the active launchd session immediately
 	l.applyImmediately(key, value, varType)
-
-	return nil
+	return res, nil
 }
 
 // Remove comments out or deletes the variable from launchd.sh and active session.
-func (l *LaunchdTarget) Remove(key string, comment bool, dryRun bool) error {
-	if !l.Exists() {
-		return fmt.Errorf("file does not exist: %s", l.path)
+func (l *LaunchdTarget) Remove(key string, opts RemoveOptions) (RemoveResult, error) {
+	if err := ValidateKey(key); err != nil {
+		return RemoveResult{}, err
 	}
-
-	if dryRun {
-		fmt.Printf("[DRY-RUN] Would remove key %q from %s (comment=%v)\n", key, l.path, comment)
-		return nil
-	}
-
-	lines, err := readLines(l.path)
+	tf, err := readTextFile(l.path)
 	if err != nil {
-		return fmt.Errorf("reading launchd script: %w", err)
+		return RemoveResult{}, fmt.Errorf("reading launchd script: %w", err)
+	}
+	if !tf.existed {
+		return RemoveResult{}, fmt.Errorf("file does not exist: %s", l.path)
 	}
 
-	prefix := fmt.Sprintf("launchctl setenv %s ", key)
-	found := false
-	var out []string
-
-	for _, ln := range lines {
+	prefix, commentPrefix := launchdPrefixes(key)
+	var res RemoveResult
+	out := make([]string, 0, len(tf.lines))
+	for i, ln := range tf.lines {
 		trimmed := strings.TrimSpace(ln)
-		if strings.HasPrefix(trimmed, prefix) {
-			found = true
-			if comment {
-				indent := ln[:len(ln)-len(strings.TrimLeft(ln, " \t"))]
-				out = append(out, indent+"# envset: "+trimmed)
+		isActive := strings.HasPrefix(trimmed, prefix)
+		isCommented := strings.HasPrefix(trimmed, commentPrefix)
+		if (isActive || isCommented) && opts.Value != "" && !strings.Contains(trimmed, opts.Value) {
+			isActive, isCommented = false, false
+		}
+		switch {
+		case isActive:
+			res.Affected = append(res.Affected, Entry{Key: key, RawLine: ln, LineNum: i + 1})
+			if opts.Comment {
+				out = append(out, leadingWS(ln)+"# envset: "+trimmed)
 			}
-			// if comment is false, we just skip (delete) it
-		} else {
+		case isCommented && opts.Comment:
+			res.Skipped++
+			out = append(out, ln)
+		case isCommented:
+			res.Affected = append(res.Affected, Entry{Key: key, RawLine: ln, LineNum: i + 1, IsComment: true})
+		default:
 			out = append(out, ln)
 		}
 	}
 
-	if !found {
-		return fmt.Errorf("key %q not found in %s", key, l.path)
+	if len(res.Affected) == 0 {
+		if res.Skipped > 0 {
+			return res, nil
+		}
+		return res, fmt.Errorf("key %q not found in %s", key, l.path)
+	}
+	if opts.DryRun {
+		return res, nil
 	}
 
-	if err := writeLines(l.path, out); err != nil {
-		return fmt.Errorf("writing launchd script: %w", err)
+	tf.lines = out
+	res.Backup, err = CommitFile(l.path, "sh", tf.raw, true, tf.bytes(), 0o755)
+	if err != nil {
+		return res, fmt.Errorf("writing launchd script: %w", err)
 	}
-
-	// Remove from the active session immediately
-	cmd := exec.Command("launchctl", "unsetenv", key)
-	_ = cmd.Run()
-
-	return nil
+	// Unset in the live session too — but never PATH, which would leave GUI
+	// apps with no PATH at all until next login.
+	if key != "PATH" {
+		_ = runLaunchctl("unsetenv", key)
+	}
+	return res, nil
 }
 
 // List parses launchd.sh to list variables.
@@ -201,10 +228,7 @@ func (l *LaunchdTarget) List(key string) ([]Entry, error) {
 		v := parts[1]
 
 		// Unquote value
-		if strings.HasPrefix(v, "\"") && strings.HasSuffix(v, "\"") {
-			v = v[1 : len(v)-1]
-			v = strings.ReplaceAll(v, "\\\"", "\"")
-		}
+		v = unquoteValue(v)
 
 		if key != "" && k != key {
 			continue
@@ -261,7 +285,7 @@ func (l *LaunchdTarget) ensurePlist() error {
 </plist>
 `, l.path)
 
-	return os.WriteFile(l.plistPath, []byte(plistContent), 0644)
+	return fsutil.WriteFileAtomic(l.plistPath, []byte(plistContent), 0o644)
 }
 
 // applyImmediately runs launchctl setenv to update the active session.
@@ -279,12 +303,12 @@ func (l *LaunchdTarget) applyImmediately(key, value string, varType VarType) {
 	}
 
 	// Update our own current process env so it's consistent if queried
-	if key == "PATH" {
+	if key == "PATH" || varType == VarTypePathAppend || varType == VarTypePathPrepend {
+		key = "PATH"
 		_ = os.Setenv("PATH", runVal)
 	}
 
-	cmd := exec.Command("launchctl", "setenv", key, runVal)
-	_ = cmd.Run()
+	_ = runLaunchctl("setenv", key, runVal)
 }
 
 // Helper functions (defined in shell.go, copy/pasted or reused)
@@ -301,12 +325,4 @@ func readLines(path string) ([]string, error) {
 		lines = append(lines, scanner.Text())
 	}
 	return lines, scanner.Err()
-}
-
-func writeLines(path string, lines []string) error {
-	content := strings.Join(lines, "\n")
-	if !strings.HasSuffix(content, "\n") && len(lines) > 0 {
-		content += "\n"
-	}
-	return os.WriteFile(path, []byte(content), 0644)
 }

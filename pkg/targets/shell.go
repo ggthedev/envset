@@ -10,10 +10,9 @@ import (
 
 // ShellTarget manages a shell configuration file.
 type ShellTarget struct {
-	name    string
-	path    string
-	shell   string // zsh, bash, fish
-	exists  bool
+	name  string
+	path  string
+	shell string // zsh, bash, fish
 }
 
 // NewShellTarget creates a shell target by name and home directory.
@@ -56,130 +55,207 @@ func NewShellTarget(name, home string) (*ShellTarget, error) {
 		return nil, fmt.Errorf("unsupported shell target: %s", name)
 	}
 
-	_, err := os.Stat(path)
-	exists := err == nil
-
-	return &ShellTarget{
-		name:   name,
-		path:   path,
-		shell:  shell,
-		exists: exists,
-	}, nil
+	return &ShellTarget{name: name, path: path, shell: shell}, nil
 }
 
 func (s *ShellTarget) Name() string { return s.name }
-func (s *ShellTarget) Path() string  { return s.path }
-func (s *ShellTarget) Exists() bool { return s.exists }
-
-// Add inserts a new variable entry. If dryRun is true, no file is modified.
-func (s *ShellTarget) Add(key, value string, varType VarType, dryRun bool) error {
-	line, err := s.formatLine(key, value, varType)
-	if err != nil {
-		return err
-	}
-
-	if dryRun {
-		fmt.Printf("[DRY-RUN] Would append to %s:\n%s\n", s.path, line)
-		return nil
-	}
-
-	f, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open %s: %w", s.path, err)
-	}
-	defer f.Close()
-
-	// Add a newline before the entry if file is non-empty and doesn't end with newline.
-	stat, err := os.Stat(s.path)
-	if err == nil && stat.Size() > 0 {
-		// Read last byte to check for trailing newline
-		f2, err := os.Open(s.path)
-		if err == nil {
-			f2.Seek(-1, os.SEEK_END)
-			buf := make([]byte, 1)
-			f2.Read(buf)
-			f2.Close()
-			if buf[0] != '\n' {
-				f.WriteString("\n")
-			}
-		}
-	}
-
-	_, err = f.WriteString(line + "\n")
-	if err != nil {
-		return fmt.Errorf("failed to write to %s: %w", s.path, err)
-	}
-
-	s.exists = true
-	return nil
+func (s *ShellTarget) Path() string { return s.path }
+func (s *ShellTarget) Exists() bool {
+	_, err := os.Stat(s.path)
+	return err == nil
 }
 
-// Remove deletes or comments out entries matching key.
-func (s *ShellTarget) Remove(key string, comment bool, dryRun bool) error {
-	if !s.exists {
-		return fmt.Errorf("file does not exist: %s", s.path)
+// keyed reports whether entries of this type are identified by their key, so
+// adding the same key again updates the existing line instead of appending.
+// PATH is never keyed: replacing someone's PATH line would drop their entries.
+func keyed(key string, vt VarType) bool {
+	if key == "PATH" {
+		return false
 	}
-
-	entries, err := s.List(key)
-	if err != nil {
-		return err
+	switch vt {
+	case VarTypeExport, VarTypeExportAndPathAppend, VarTypeFishSet:
+		return true
 	}
+	return false
+}
 
-	if len(entries) == 0 {
-		return fmt.Errorf("no entries found for key %q in %s", key, s.path)
+// companionPathLines are the forms of the PATH line written by
+// export_and_path_append for key.
+func companionPathLines(key string) []string {
+	return []string{
+		fmt.Sprintf(`export PATH="$PATH:$%s"`, key),
+		fmt.Sprintf(`export PATH="$PATH:${%s}"`, key),
 	}
+}
 
-	if dryRun {
-		action := "delete"
-		if comment {
-			action = "comment out"
+func isCompanion(trimmed, key string) bool {
+	for _, c := range companionPathLines(key) {
+		if trimmed == c {
+			return true
 		}
-		fmt.Printf("[DRY-RUN] Would %s %d line(s) in %s\n", action, len(entries), s.path)
-		for _, e := range entries {
-			fmt.Printf("  line %d: %s\n", e.LineNum, strings.TrimSpace(e.RawLine))
-		}
-		return nil
 	}
+	return false
+}
 
-	lines, err := s.readAllLines()
+// Add inserts a new entry, updates an existing definition of the same key in
+// place, or does nothing if an identical line is already active.
+func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions) (AddResult, error) {
+	newLines, err := s.formatLines(key, value, varType, opts.Quote)
 	if err != nil {
-		return err
+		return AddResult{}, err
+	}
+	tf, err := readTextFile(s.path)
+	if err != nil {
+		return AddResult{}, err
+	}
+	res := AddResult{Lines: newLines}
+
+	active := func(i int) (Entry, string) {
+		e := s.parseLine(tf.lines[i], i+1)
+		return e, strings.TrimSpace(tf.lines[i])
+	}
+	hasActiveLine := func(want string) bool {
+		for i := range tf.lines {
+			if e, t := active(i); !e.IsComment && t == want {
+				return true
+			}
+		}
+		return false
 	}
 
-	for _, e := range entries {
-		if e.LineNum < 1 || e.LineNum > len(lines) {
+	if keyed(key, varType) {
+		last := -1
+		for i := range tf.lines {
+			if e, _ := active(i); !e.IsComment && e.Key == key && e.VarType == entryTypeFor(varType) {
+				last = i // the last definition is the one that wins
+			}
+		}
+		switch {
+		case last < 0:
+			tf.appendLines(newLines...)
+			res.Outcome = Appended
+		case strings.TrimSpace(tf.lines[last]) == newLines[0]:
+			res.Outcome = Unchanged
+		default:
+			res.Outcome = Updated
+			res.LineNum = last + 1
+			res.Previous = tf.lines[last]
+			tf.lines[last] = leadingWS(tf.lines[last]) + newLines[0]
+		}
+		// export_and_path_append: make sure the companion PATH line exists.
+		if varType == VarTypeExportAndPathAppend && res.Outcome != Appended {
+			if !hasActiveLine(newLines[1]) && !hasActiveLine(companionPathLines(key)[1]) {
+				idx := last + 1
+				tf.lines = append(tf.lines[:idx], append([]string{newLines[1]}, tf.lines[idx:]...)...)
+				if res.Outcome == Unchanged {
+					res.Outcome = Updated
+					res.LineNum = idx + 1
+				}
+			}
+		}
+	} else {
+		all := true
+		for _, l := range newLines {
+			if !hasActiveLine(l) {
+				all = false
+			}
+		}
+		if all {
+			res.Outcome = Unchanged
+		} else {
+			tf.appendLines(newLines...)
+			res.Outcome = Appended
+		}
+	}
+
+	if res.Outcome == Unchanged || opts.DryRun {
+		return res, nil
+	}
+	res.Backup, err = CommitFile(s.path, s.shell, tf.raw, tf.existed, tf.bytes(), 0o644)
+	return res, err
+}
+
+// entryTypeFor maps a write type to the type parseLine reports for its line.
+func entryTypeFor(vt VarType) VarType {
+	if vt == VarTypeExportAndPathAppend {
+		return VarTypeExport
+	}
+	return vt
+}
+
+// Remove deletes or comments out entries for key. Only the matched lines are
+// touched; the rest of the file is preserved byte-for-byte.
+func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, error) {
+	if err := ValidateKey(key); err != nil {
+		return RemoveResult{}, err
+	}
+	if key == "PATH" && opts.Value == "" {
+		return RemoveResult{}, fmt.Errorf("refusing to remove every PATH line in %s; pass --value <dir> to pick which entry", s.path)
+	}
+	tf, err := readTextFile(s.path)
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	if !tf.existed {
+		return RemoveResult{}, fmt.Errorf("file does not exist: %s", s.path)
+	}
+
+	var res RemoveResult
+	hit := map[int]bool{}
+	for i, line := range tf.lines {
+		e := s.parseLine(line, i+1)
+		match := e.Key == key && (opts.Value == "" || strings.Contains(e.Value, opts.Value))
+		if !match && key != "PATH" {
+			t := strings.TrimSpace(line)
+			if e.IsComment {
+				t = strings.TrimSpace(strings.TrimPrefix(t, "#"))
+			}
+			match = isCompanion(t, key)
+		}
+		if !match {
 			continue
 		}
-		if comment {
-			lines[e.LineNum-1] = "# " + lines[e.LineNum-1]
-		} else {
-			lines[e.LineNum-1] = ""
+		if opts.Comment && e.IsComment {
+			res.Skipped++
+			continue
+		}
+		hit[i] = true
+		res.Affected = append(res.Affected, e)
+	}
+
+	if len(res.Affected) == 0 {
+		if res.Skipped > 0 {
+			return res, nil // already commented out: nothing to do
+		}
+		if opts.Value != "" {
+			return res, fmt.Errorf("no entries for %q containing %q in %s", key, opts.Value, s.path)
+		}
+		return res, fmt.Errorf("no entries found for key %q in %s", key, s.path)
+	}
+	if opts.DryRun {
+		return res, nil
+	}
+
+	out := make([]string, 0, len(tf.lines))
+	for i, line := range tf.lines {
+		switch {
+		case !hit[i]:
+			out = append(out, line)
+		case opts.Comment:
+			out = append(out, leadingWS(line)+"# "+strings.TrimLeft(line, " \t"))
 		}
 	}
-
-	// Write back, filtering out empty lines for deletion case
-	var out []string
-	for _, l := range lines {
-		if l != "" || comment {
-			out = append(out, l)
-		}
-	}
-
-	content := strings.Join(out, "\n")
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-
-	return os.WriteFile(s.path, []byte(content), 0644)
+	tf.lines = out
+	res.Backup, err = CommitFile(s.path, s.shell, tf.raw, true, tf.bytes(), 0o644)
+	return res, err
 }
 
 // List returns entries matching key (empty key returns all).
 func (s *ShellTarget) List(key string) ([]Entry, error) {
-	if !s.exists {
+	f, err := os.Open(s.path)
+	if os.IsNotExist(err) {
 		return nil, nil
 	}
-
-	f, err := os.Open(s.path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open %s: %w", s.path, err)
 	}
@@ -187,61 +263,79 @@ func (s *ShellTarget) List(key string) ([]Entry, error) {
 
 	var entries []Entry
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++
-		line := scanner.Text()
-		entry := s.parseLine(line, lineNum)
+		entry := s.parseLine(scanner.Text(), lineNum)
 		if key == "" || entry.Key == key {
 			entries = append(entries, entry)
 		}
 	}
-
 	return entries, scanner.Err()
 }
 
-func (s *ShellTarget) Preview(key, value string, varType VarType) (string, error) {
-	return s.formatLine(key, value, varType)
-}
-
-func (s *ShellTarget) readAllLines() ([]string, error) {
-	data, err := os.ReadFile(s.path)
+func (s *ShellTarget) Preview(key, value string, varType VarType, quote QuoteMode) (string, error) {
+	lines, err := s.formatLines(key, value, varType, quote)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return strings.Split(string(data), "\n"), nil
+	return strings.Join(lines, "\n"), nil
 }
 
-func (s *ShellTarget) formatLine(key, value string, varType VarType) (string, error) {
+func (s *ShellTarget) formatLines(key, value string, varType VarType, quote QuoteMode) ([]string, error) {
+	needKey := varType == VarTypeExport || varType == VarTypeExportAndPathAppend || varType == VarTypeFishSet
+	if needKey {
+		if err := ValidateKey(key); err != nil {
+			return nil, err
+		}
+	}
 	switch varType {
 	case VarTypeExport:
-		return fmt.Sprintf("export %s=%s", key, s.quoteValue(value)), nil
+		v, err := encodePosix(value, quote, false)
+		if err != nil {
+			return nil, err
+		}
+		return []string{fmt.Sprintf("export %s=%s", key, v)}, nil
 	case VarTypeExportAndPathAppend:
-		return fmt.Sprintf("export %s=%s\nexport PATH=\"$PATH:$%s\"", key, s.quoteValue(value), key), nil
+		v, err := encodePosix(value, quote, false)
+		if err != nil {
+			return nil, err
+		}
+		return []string{fmt.Sprintf("export %s=%s", key, v), companionPathLines(key)[0]}, nil
 	case VarTypeEval:
-		return fmt.Sprintf("eval %s", value), nil
+		// eval's value is a command by definition (e.g. "$(rbenv init -)").
+		if err := checkNoNewline(value); err != nil {
+			return nil, err
+		}
+		return []string{"eval " + value}, nil
 	case VarTypeSource:
-		return fmt.Sprintf("source %s", value), nil
-	case VarTypePathAppend:
-		return fmt.Sprintf("export PATH=\"$PATH:%s\"", value), nil
-	case VarTypePathPrepend:
-		return fmt.Sprintf("export PATH=\"%s:$PATH\"", value), nil
+		v, err := encodePosix(value, quote, false)
+		if err != nil {
+			return nil, err
+		}
+		return []string{"source " + v}, nil
+	case VarTypePathAppend, VarTypePathPrepend:
+		v, err := encodePosixPathElem(value, quote)
+		if err != nil {
+			return nil, err
+		}
+		if varType == VarTypePathAppend {
+			return []string{fmt.Sprintf(`export PATH="$PATH:%s"`, v)}, nil
+		}
+		return []string{fmt.Sprintf(`export PATH="%s:$PATH"`, v)}, nil
 	case VarTypeFishSet:
 		if s.shell != "fish" {
-			return "", fmt.Errorf("fish_set is only valid for fish shell configs")
+			return nil, fmt.Errorf("fish_set is only valid for fish shell configs")
 		}
-		return fmt.Sprintf("set -x %s %s", key, value), nil
+		v, err := encodeFish(value, quote)
+		if err != nil {
+			return nil, err
+		}
+		return []string{fmt.Sprintf("set -x %s %s", key, v)}, nil
 	default:
-		return "", fmt.Errorf("unsupported var type %q", varType)
+		return nil, fmt.Errorf("unsupported var type %q", varType)
 	}
-}
-
-func (s *ShellTarget) quoteValue(v string) string {
-	// Simple quoting: if value contains spaces or special chars, use double quotes.
-	if strings.ContainsAny(v, " \\t\n\r\"'$&|;<>") {
-		return fmt.Sprintf("\"%s\"", strings.ReplaceAll(v, "\"", "\\\""))
-	}
-	return v
 }
 
 func (s *ShellTarget) parseLine(line string, lineNum int) Entry {
@@ -261,7 +355,7 @@ func (s *ShellTarget) parseLine(line string, lineNum int) Entry {
 		rest := strings.TrimPrefix(trimmed, "export ")
 		if idx := strings.Index(rest, "="); idx > 0 {
 			entry.Key = rest[:idx]
-			entry.Value = strings.Trim(strings.TrimSpace(rest[idx+1:]), `"`)
+			entry.Value = unquoteValue(rest[idx+1:])
 			entry.VarType = VarTypeExport
 		}
 		return entry
@@ -273,7 +367,7 @@ func (s *ShellTarget) parseLine(line string, lineNum int) Entry {
 		if len(parts) >= 3 {
 			entry.Key = parts[2]
 			if len(parts) >= 4 {
-				entry.Value = strings.Join(parts[3:], " ")
+				entry.Value = unquoteValue(strings.Join(parts[3:], " "))
 			}
 			entry.VarType = VarTypeFishSet
 		}
@@ -291,12 +385,6 @@ func (s *ShellTarget) parseLine(line string, lineNum int) Entry {
 	if strings.HasPrefix(trimmed, "source ") {
 		entry.VarType = VarTypeSource
 		entry.Value = strings.TrimSpace(strings.TrimPrefix(trimmed, "source "))
-		return entry
-	}
-
-	// Try PATH=...
-	if strings.HasPrefix(trimmed, "PATH=") || strings.HasPrefix(trimmed, "export PATH=") {
-		entry.VarType = VarTypePathAppend
 		return entry
 	}
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/ops"
+	"github.com/experimentalist/envset/pkg/targets"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +27,12 @@ var (
 
 	lazyInitCmd string
 	lazyWrite   bool
+
+	literal bool
+	raw     bool
+
+	restoreList   bool
+	restoreBackup string
 )
 
 var rootCmd = &cobra.Command{
@@ -41,6 +48,10 @@ Subcommands:
   audit    Audit shell config files for placement & performance issues
   detect   Show detected shell and configuration files
   reload   Print source commands for one or all config files
+  restore  Undo the last change to a config file from its backup
+  lazy     Generate a lazy-load wrapper for a slow-init tool
+
+Every write is atomic and preceded by a backup in ~/.config/envset/backups.
 `,
 	// Errors from RunE are application-level, not CLI-usage problems.
 	SilenceUsage:  true,
@@ -56,9 +67,27 @@ Subcommands:
 var addCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add an environment variable",
-	Long:  `Add or set an environment variable in a shell config file.`,
+	Long: `Add or set an environment variable in a shell config file.
+
+Adding a key that already exists updates it in place; adding an identical
+line again is a no-op.
+
+Value encoding:
+  (default)   literal text, except $VAR / ${VAR} expand and a leading ~/ means $HOME/.
+              Command substitution ($(...) or backticks) is rejected.
+  --literal   store the value exactly, single-quoted; nothing expands.
+  --raw       write the value unquoted and unchecked (you own the syntax).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return ops.Add(key, value, targetName, varType, dryRun, yes, printSource)
+		if literal && raw {
+			return fmt.Errorf("--literal and --raw are mutually exclusive")
+		}
+		quote := targets.QuoteExpand
+		if literal {
+			quote = targets.QuoteLiteral
+		} else if raw {
+			quote = targets.QuoteRaw
+		}
+		return ops.Add(key, value, targetName, varType, quote, dryRun, yes, printSource)
 	},
 }
 
@@ -67,9 +96,10 @@ var removeCmd = &cobra.Command{
 	Aliases: []string{"rm", "delete", "del"},
 	Short:   "Remove an environment variable",
 	Long: `Remove (or comment out) an environment variable from a shell config file.
-Use --comment to comment out instead of deleting.`,
+Comments out by default; pass --comment=false to delete the line(s).
+For PATH, --value is required and selects which entry to remove.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return ops.Remove(key, targetName, comment, dryRun, printSource)
+		return ops.Remove(key, value, targetName, comment, dryRun, printSource)
 	},
 }
 
@@ -124,6 +154,23 @@ zoxide, atuin, mcfly, thefuck, navi, tv.`,
 	},
 }
 
+var restoreCmd = &cobra.Command{
+	Use:   "restore",
+	Short: "Undo the last change to a config file from its backup",
+	Long: `Restore a config file from the backups envset takes before every write.
+
+  envset restore --target zshrc --list        # show available backups
+  envset restore --target zshrc               # restore the most recent one
+  envset restore --target zshrc --backup <f>  # restore a specific backup
+
+The current contents are saved first (marked pre-restore), so a restore can
+itself be undone with --backup.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return ops.Restore(targetName, restoreBackup, restoreList, dryRun)
+	},
+}
+
 var auditCmd = &cobra.Command{
 	Use:   "audit",
 	Short: "Audit shell config files for placement & performance issues",
@@ -143,7 +190,7 @@ Exits non-zero if any error-level finding is reported.`,
 }
 
 func init() {
-	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd, lazyCmd)
+	rootCmd.AddCommand(addCmd, removeCmd, listCmd, detectCmd, reloadCmd, auditCmd, lazyCmd, restoreCmd)
 
 	// add flags
 	// Persistent flags (apply to every subcommand)
@@ -152,14 +199,17 @@ func init() {
 	addCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name")
 	addCmd.Flags().StringVar(&value, "value", "", "Variable value")
 	addCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (e.g., zshrc, bashrc)")
-	addCmd.Flags().StringVar(&varType, "type", "export", "Variable type: export, eval, source, path_append, path_prepend, fish_set")
+	addCmd.Flags().StringVar(&varType, "type", "export", "Variable type: export, export_and_path_append, eval, source, path_append, path_prepend, fish_set")
 	addCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview without writing")
 	addCmd.Flags().BoolVar(&yes, "yes", false, "Auto-confirm placer suggestions when --target is omitted")
 	addCmd.Flags().BoolVar(&printSource, "print-source", false, "After writing, print only `source <file>` to stdout (eval-friendly)")
+	addCmd.Flags().BoolVar(&literal, "literal", false, "Store the value verbatim in single quotes (no $VAR expansion)")
+	addCmd.Flags().BoolVar(&raw, "raw", false, "Write the value unquoted and unchecked (allows $(...) — use with care)")
 
 	// remove flags
 	removeCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name to remove")
 	removeCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file")
+	removeCmd.Flags().StringVar(&value, "value", "", "Only remove entries whose value contains this (required for PATH)")
 	removeCmd.Flags().BoolVar(&comment, "comment", true, "Comment out instead of deleting")
 	removeCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview without writing")
 	removeCmd.Flags().BoolVar(&printSource, "print-source", false, "After writing, print only `source <file>` to stdout (eval-friendly)")
@@ -170,6 +220,13 @@ func init() {
 
 	// reload flags
 	reloadCmd.Flags().StringVarP(&targetName, "target", "t", "", "Target config file (omit for all existing files)")
+
+	// restore flags
+	restoreCmd.Flags().StringVarP(&targetName, "target", "t", "", "Config file to restore (e.g. zshrc, launchd, or a path)")
+	restoreCmd.Flags().BoolVar(&restoreList, "list", false, "List available backups instead of restoring")
+	restoreCmd.Flags().StringVar(&restoreBackup, "backup", "", "Restore this specific backup file instead of the latest")
+	restoreCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show which backup would be restored without writing")
+	_ = restoreCmd.MarkFlagRequired("target")
 
 	// audit flags
 	auditCmd.Flags().BoolVar(&auditFix, "fix", false, "Apply safe automatic fixes (comment out broken lines)")

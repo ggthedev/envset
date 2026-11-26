@@ -16,14 +16,13 @@ func TestShellTargetAddListRemove(t *testing.T) {
 	f.Close()
 
 	st := &ShellTarget{
-		name:   "bashrc",
-		path:   f.Name(),
-		shell:  "bash",
-		exists: true,
+		name:  "bashrc",
+		path:  f.Name(),
+		shell: "bash",
 	}
 
 	// Add export
-	if err := st.Add("FOO", "bar", VarTypeExport, false); err != nil {
+	if _, err := st.Add("FOO", "bar", VarTypeExport, WriteOptions{}); err != nil {
 		t.Fatalf("add failed: %v", err)
 	}
 
@@ -40,7 +39,7 @@ func TestShellTargetAddListRemove(t *testing.T) {
 	}
 
 	// Remove (delete)
-	if err := st.Remove("FOO", false, false); err != nil {
+	if _, err := st.Remove("FOO", RemoveOptions{Comment: false}); err != nil {
 		t.Fatalf("remove failed: %v", err)
 	}
 
@@ -62,18 +61,17 @@ func TestShellTargetComment(t *testing.T) {
 	f.Close()
 
 	st := &ShellTarget{
-		name:   "zshrc",
-		path:   f.Name(),
-		shell:  "zsh",
-		exists: true,
+		name:  "zshrc",
+		path:  f.Name(),
+		shell: "zsh",
 	}
 
-	if err := st.Add("SECRET", "key123", VarTypeExport, false); err != nil {
+	if _, err := st.Add("SECRET", "key123", VarTypeExport, WriteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Comment out
-	if err := st.Remove("SECRET", true, false); err != nil {
+	if _, err := st.Remove("SECRET", RemoveOptions{Comment: true}); err != nil {
 		t.Fatalf("comment out failed: %v", err)
 	}
 
@@ -98,13 +96,12 @@ func TestShellTargetPathAppend(t *testing.T) {
 	f.Close()
 
 	st := &ShellTarget{
-		name:   "bashrc",
-		path:   f.Name(),
-		shell:  "bash",
-		exists: true,
+		name:  "bashrc",
+		path:  f.Name(),
+		shell: "bash",
 	}
 
-	if err := st.Add("", "/usr/local/bin", VarTypePathAppend, false); err != nil {
+	if _, err := st.Add("", "/usr/local/bin", VarTypePathAppend, WriteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +114,7 @@ func TestShellTargetPathAppend(t *testing.T) {
 func TestShellTargetPreview(t *testing.T) {
 	st := &ShellTarget{shell: "bash"}
 
-	p, err := st.Preview("FOO", "bar", VarTypeExport)
+	p, err := st.Preview("FOO", "bar", VarTypeExport, QuoteExpand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +122,7 @@ func TestShellTargetPreview(t *testing.T) {
 		t.Fatalf("unexpected preview: %s", p)
 	}
 
-	p, err = st.Preview("", "$(rbenv init -)", VarTypeEval)
+	p, err = st.Preview("", "$(rbenv init -)", VarTypeEval, QuoteExpand)
 	if err != nil {
 		t.Fatal(err)
 	}

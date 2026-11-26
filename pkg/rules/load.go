@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/experimentalist/envset/pkg/fsutil"
 )
 
 // Dir returns the directory that holds rules files: ~/.config/envset/.
@@ -183,10 +185,5 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	// Atomic write: temp file in same dir + rename.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fsutil.WriteFileAtomic(path, b, 0o644)
 }

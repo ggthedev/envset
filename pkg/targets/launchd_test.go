@@ -25,7 +25,7 @@ func TestLaunchdTargetAddListRemove(t *testing.T) {
 	}
 
 	// 2. Add export
-	if err := lt.Add("TEST_VAR", "my val \"quote\"", VarTypeExport, false); err != nil {
+	if _, err := lt.Add("TEST_VAR", "my val \"quote\"", VarTypeExport, WriteOptions{}); err != nil {
 		t.Fatalf("add failed: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestLaunchdTargetAddListRemove(t *testing.T) {
 	}
 
 	// 7. Comment out
-	if err := lt.Remove("TEST_VAR", true, false); err != nil {
+	if _, err := lt.Remove("TEST_VAR", RemoveOptions{Comment: true}); err != nil {
 		t.Fatalf("comment out failed: %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestLaunchdTargetAddListRemove(t *testing.T) {
 	}
 
 	// 8. Delete permanently
-	if err := lt.Remove("TEST_VAR", false, false); err != nil {
+	if _, err := lt.Remove("TEST_VAR", RemoveOptions{Comment: false}); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
@@ -112,11 +112,11 @@ func TestLaunchdTargetPathAppendPrepend(t *testing.T) {
 	lt, _ := NewLaunchdTarget(tmpHome)
 
 	// Append
-	if err := lt.Add("PATH", "/my/append/path", VarTypePathAppend, false); err != nil {
+	if _, err := lt.Add("PATH", "/my/append/path", VarTypePathAppend, WriteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	// Prepend
-	if err := lt.Add("PATH", "/my/prepend/path", VarTypePathPrepend, false); err != nil {
+	if _, err := lt.Add("PATH", "/my/prepend/path", VarTypePathPrepend, WriteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestLaunchdTargetPathAppendPrepend(t *testing.T) {
 func TestLaunchdTargetPreview(t *testing.T) {
 	lt := &LaunchdTarget{}
 
-	p, err := lt.Preview("MY_VAR", "val", VarTypeExport)
+	p, err := lt.Preview("MY_VAR", "val", VarTypeExport, QuoteExpand)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestLaunchdTargetPreview(t *testing.T) {
 		t.Errorf("unexpected preview: %s", p)
 	}
 
-	p, err = lt.Preview("PATH", "/my/path", VarTypePathAppend)
+	p, err = lt.Preview("PATH", "/my/path", VarTypePathAppend, QuoteExpand)
 	if err != nil {
 		t.Fatal(err)
 	}

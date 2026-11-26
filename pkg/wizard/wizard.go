@@ -233,7 +233,7 @@ preview:
 			err = tErr
 			return
 		}
-		preview, _ := t.Preview(key, value, varType)
+		preview, _ := t.Preview(key, value, varType, targets.QuoteExpand)
 		fmt.Printf("\nPreview line:\n  %s\n\n", preview)
 	}
 

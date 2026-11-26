@@ -9,6 +9,7 @@ import (
 
 	"github.com/experimentalist/envset/pkg/audit"
 	"github.com/experimentalist/envset/pkg/detector"
+	"github.com/experimentalist/envset/pkg/fsutil"
 	"github.com/experimentalist/envset/pkg/lazy"
 	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/placer"
@@ -24,10 +25,12 @@ const envsetVersion = "dev"
 // Add adds an environment variable entry.
 // When printSource is true, only the `source <file>` command is written to stdout
 // (so you can `eval "$(envset add ... --print-source)"`). All other output goes to stderr.
-func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource bool) error {
+//
+// quote selects value encoding: targets.QuoteExpand (default), QuoteLiteral or QuoteRaw.
+func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dryRun, autoYes, printSource bool) error {
 	logger.Step("ops.Add")
-	logger.Input("key=%q value=%q target=%q type=%q dry_run=%v auto_yes=%v print_source=%v",
-		key, redact(key, value), targetName, varTypeStr, dryRun, autoYes, printSource)
+	logger.Input("key=%q value=%q target=%q type=%q quote=%q dry_run=%v auto_yes=%v print_source=%v",
+		key, redact(key, value), targetName, varTypeStr, quote, dryRun, autoYes, printSource)
 
 	var varType targets.VarType
 	var err error
@@ -36,6 +39,11 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 	infoOut := os.Stdout
 	if printSource {
 		infoOut = os.Stderr
+	}
+
+	// PATH entries don't need --key.
+	if key == "" && (varTypeStr == string(targets.VarTypePathAppend) || varTypeStr == string(targets.VarTypePathPrepend)) {
+		key = "PATH"
 	}
 
 	// If any required flag is missing, run wizard
@@ -108,43 +116,82 @@ func Add(key, value, targetName, varTypeStr string, dryRun, autoYes, printSource
 		}
 	}
 
-	home, _ := os.UserHomeDir()
+	if varType == targets.VarTypePathAppend || varType == targets.VarTypePathPrepend {
+		key = "PATH"
+	}
+
+	home, err := homeDir()
+	if err != nil {
+		return err
+	}
 	t, err := targets.Factory(targetName, home)
 	if err != nil {
 		return err
 	}
 
-	if !dryRun {
-		preview, _ := t.Preview(key, value, varType)
-		fmt.Fprintf(infoOut, "Adding to %s:\n  %s\n", t.Path(), preview)
-	}
-
 	logger.Step("write")
-	if err := t.Add(key, value, varType, dryRun); err != nil {
+	res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: dryRun, Quote: quote})
+	if err != nil {
 		return err
 	}
+	dry := ""
 	if dryRun {
-		logger.Result("add: dry-run — would write %s=%s to %s", key, redact(key, value), t.Path())
-	} else {
-		logger.Result("add: wrote %s to %s", key, t.Path())
+		dry = "[DRY-RUN] would have "
 	}
+	switch res.Outcome {
+	case targets.Unchanged:
+		fmt.Fprintf(infoOut, "No change: %s already contains:\n  %s\n", t.Path(), strings.Join(res.Lines, "\n  "))
+		logger.Result("add: unchanged — %s already present in %s", key, t.Path())
+		return nil
+	case targets.Updated:
+		fmt.Fprintf(infoOut, "%supdated %s line %d:\n  - %s\n  + %s\n", dry, t.Path(), res.LineNum,
+			strings.TrimSpace(res.Previous), strings.Join(res.Lines, "\n  + "))
+	default:
+		fmt.Fprintf(infoOut, "%sadded to %s:\n  %s\n", dry, t.Path(), strings.Join(res.Lines, "\n  "))
+	}
+	if dryRun {
+		logger.Result("add: dry-run — would %s %s=%s in %s", res.Outcome, key, redact(key, value), t.Path())
+		return nil
+	}
+	reportBackup(infoOut, res.Backup)
+	logger.Result("add: %s %s in %s", res.Outcome, key, t.Path())
 
 	// Post-write: emit source hint or eval-able source command
-	if !dryRun {
-		if printSource {
-			PrintSourceCommand(os.Stdout, t.Path())
-		} else {
-			PrintReloadHint(t.Path())
-		}
+	if printSource {
+		PrintSourceCommand(os.Stdout, t.Path())
+	} else {
+		PrintReloadHint(t.Path())
 	}
 	return nil
 }
 
+// reportBackup tells the user where the pre-change copy went.
+func reportBackup(w *os.File, backup string) {
+	if backup == "" {
+		return
+	}
+	fmt.Fprintf(w, "Backup saved: %s  (undo: envset restore --target <file>)\n", fsutil.Tilde(backup))
+	logger.Trace("backup saved: %s", backup)
+}
+
+// homeDir returns $HOME, failing loudly instead of silently writing relative
+// paths into the current directory when it cannot be determined.
+func homeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("cannot determine home directory (is $HOME set?): %v", err)
+	}
+	return home, nil
+}
+
 // Remove removes (or comments out) an environment variable entry.
-func Remove(key, targetName string, comment, dryRun, printSource bool) error {
+//
+// value, when non-empty, restricts removal to entries whose value contains it
+// (required for PATH so one entry can be removed without wiping the others).
+func Remove(key, value, targetName string, comment, dryRun, printSource bool) error {
 	logger.Step("ops.Remove")
-	logger.Input("key=%q target=%q comment=%v dry_run=%v print_source=%v",
-		key, targetName, comment, dryRun, printSource)
+	logger.Input("key=%q value=%q target=%q comment=%v dry_run=%v print_source=%v",
+		key, redact(key, value), targetName, comment, dryRun, printSource)
 
 	infoOut := os.Stdout
 	if printSource {
@@ -166,32 +213,48 @@ func Remove(key, targetName string, comment, dryRun, printSource bool) error {
 		}
 	}
 
-	home, _ := os.UserHomeDir()
+	home, err := homeDir()
+	if err != nil {
+		return err
+	}
 	t, err := targets.Factory(targetName, home)
 	if err != nil {
 		return err
 	}
 
 	logger.Step("write")
-	if err := t.Remove(key, comment, dryRun); err != nil {
+	res, err := t.Remove(key, targets.RemoveOptions{Comment: comment, DryRun: dryRun, Value: value})
+	if err != nil {
 		return err
+	}
+	if len(res.Affected) == 0 {
+		fmt.Fprintf(infoOut, "No change: %s is already commented out in %s\n", key, t.Path())
+		logger.Result("remove: unchanged — %s already commented in %s", key, t.Path())
+		return nil
 	}
 	action := "deleted"
 	if comment {
-		action = "commented"
+		action = "commented out"
+	}
+	dry := ""
+	if dryRun {
+		dry = "[DRY-RUN] would have "
+	}
+	fmt.Fprintf(infoOut, "%s%s %d line(s) in %s:\n", dry, action, len(res.Affected), t.Path())
+	for _, e := range res.Affected {
+		fmt.Fprintf(infoOut, "  line %d: %s\n", e.LineNum, strings.TrimSpace(e.RawLine))
 	}
 	if dryRun {
 		logger.Result("remove: dry-run — would have %s %s from %s", action, key, t.Path())
-	} else {
-		logger.Result("remove: %s %s in %s", action, key, t.Path())
+		return nil
 	}
+	reportBackup(infoOut, res.Backup)
+	logger.Result("remove: %s %s in %s", action, key, t.Path())
 
-	if !dryRun {
-		if printSource {
-			PrintSourceCommand(os.Stdout, t.Path())
-		} else {
-			PrintReloadHint(t.Path())
-		}
+	if printSource {
+		PrintSourceCommand(os.Stdout, t.Path())
+	} else {
+		PrintReloadHint(t.Path())
 	}
 	return nil
 }
@@ -210,7 +273,10 @@ func List(key, targetName string) error {
 		}
 	}
 
-	home, _ := os.UserHomeDir()
+	home, err := homeDir()
+	if err != nil {
+		return err
+	}
 	t, err := targets.Factory(targetName, home)
 	if err != nil {
 		return err
@@ -404,10 +470,11 @@ func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, er
 		logger.Result("audit --fix --dry-run: %d op(s) previewed, nothing written", len(ops))
 		return false, nil
 	}
-	if err := audit.ApplyFixes(ops); err != nil {
+	backups, err := audit.ApplyFixes(ops)
+	if err != nil {
 		return false, fmt.Errorf("applying fixes: %w", err)
 	}
-	reportApplied(ops)
+	reportApplied(ops, backups)
 	return true, nil
 }
 
@@ -493,10 +560,11 @@ reviewLoop:
 		}
 		return false, nil
 	}
-	if err := audit.ApplyFixes(ops); err != nil {
+	backups, err := audit.ApplyFixes(ops)
+	if err != nil {
 		return false, fmt.Errorf("applying fixes: %w", err)
 	}
-	reportApplied(ops)
+	reportApplied(ops, backups)
 	return true, nil
 }
 
@@ -548,12 +616,12 @@ func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rule
 	}
 }
 
-func reportApplied(ops []audit.FixOp) {
+func reportApplied(ops []audit.FixOp, backups map[string]string) {
 	seen := map[string]bool{}
 	for _, op := range ops {
 		if !seen[op.File] {
 			seen[op.File] = true
-			fmt.Fprintf(os.Stdout, "  fixed  %s  (backup: %s.envset.bak)\n", op.File, op.File)
+			fmt.Fprintf(os.Stdout, "  fixed  %s  (backup: %s)\n", op.File, fsutil.Tilde(backups[op.File]))
 		}
 	}
 	fmt.Fprintf(os.Stdout, "\nApplied %d fix(es). Run `envset audit` to verify.\n", len(ops))
@@ -646,17 +714,32 @@ func Lazy(toolName, initCmd string, write bool) error {
 		return fmt.Errorf("no interactive config file found to write lazy wrapper")
 	}
 
-	// Append to file.
-	fh, err := os.OpenFile(target.Path, os.O_APPEND|os.O_WRONLY, 0644)
+	// Idempotent: don't stack a second wrapper for the same tool.
+	header := lazy.Header(spec.Name)
+	existing, err := os.ReadFile(target.Path)
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", target.Path, err)
+		return fmt.Errorf("reading %s: %w", target.Path, err)
 	}
-	defer fh.Close()
-	if _, err := fh.WriteString("\n" + snippet); err != nil {
+	for _, ln := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(ln) == header {
+			fmt.Fprintf(os.Stderr, "No change: a lazy wrapper for %s is already in %s\n", toolName, target.Path)
+			logger.Result("lazy: wrapper for %s already present in %s", toolName, target.Path)
+			return nil
+		}
+	}
+
+	updated := string(existing)
+	if len(updated) > 0 && !strings.HasSuffix(updated, "\n") {
+		updated += "\n"
+	}
+	updated += "\n" + snippet
+	backup, err := targets.CommitFile(target.Path, targets.ShellForPath(target.Path), existing, true, []byte(updated), 0o644)
+	if err != nil {
 		return fmt.Errorf("writing to %s: %w", target.Path, err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Appended lazy wrapper to %s\n", target.Path)
+	reportBackup(os.Stderr, backup)
 	logger.Result("lazy: appended snippet for %s to %s", toolName, target.Path)
 	return nil
 }
@@ -668,4 +751,64 @@ func redact(key, value string) string {
 		return "[redacted]"
 	}
 	return value
+}
+
+// Restore lists or restores the backups envset keeps for a config file.
+func Restore(targetName, backupPath string, list, dryRun bool) error {
+	logger.Step("ops.Restore")
+	logger.Input("target=%q backup=%q list=%v dry_run=%v", targetName, backupPath, list, dryRun)
+
+	home, err := homeDir()
+	if err != nil {
+		return err
+	}
+	t, err := targets.Factory(targetName, home)
+	if err != nil {
+		return err
+	}
+	backups, err := fsutil.ListBackups(t.Path())
+	if err != nil {
+		return err
+	}
+
+	if list {
+		if len(backups) == 0 {
+			fmt.Printf("No backups for %s\n", t.Path())
+			return nil
+		}
+		fmt.Printf("Backups for %s (newest first):\n", t.Path())
+		for _, b := range backups {
+			note := ""
+			if b.PreRestore {
+				note = "  (saved automatically before a restore)"
+			}
+			fmt.Printf("  %s  %s%s\n", b.Time.Format("2006-01-02 15:04:05"), fsutil.Tilde(b.Path), note)
+		}
+		return nil
+	}
+
+	if backupPath == "" {
+		for _, b := range backups {
+			if !b.PreRestore {
+				backupPath = b.Path
+				break
+			}
+		}
+		if backupPath == "" {
+			return fmt.Errorf("no backups found for %s", t.Path())
+		}
+	}
+	if dryRun {
+		fmt.Printf("[DRY-RUN] would restore %s from %s\n", t.Path(), backupPath)
+		return nil
+	}
+	restored, err := fsutil.Restore(t.Path(), backupPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Restored %s from %s\n", fsutil.Tilde(t.Path()), fsutil.Tilde(restored))
+	fmt.Println("The previous contents were saved first; see `envset restore --list`.")
+	logger.Result("restore: %s from %s", t.Path(), restored)
+	PrintReloadHint(t.Path())
+	return nil
 }

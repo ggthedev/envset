@@ -153,7 +153,8 @@ export BAZ=qux
 		},
 	}
 
-	if err := ApplyFixes(ops); err != nil {
+	backups, err := ApplyFixes(ops)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +168,10 @@ export BAZ=qux
 	}
 
 	// Verify backup.
-	bak := readTemp(t, path+".envset.bak")
+	if backups[path] == "" {
+		t.Fatalf("expected a backup path for %s; got %v", path, backups)
+	}
+	bak := readTemp(t, backups[path])
 	if !strings.Contains(bak, `export PATH="echo node:$PATH"`) {
 		t.Errorf("backup should contain original content; got:\n%s", bak)
 	}
@@ -175,7 +179,7 @@ export BAZ=qux
 
 func TestApplyFixes_Noop(t *testing.T) {
 	// ApplyFixes with empty ops should return nil without touching anything.
-	if err := ApplyFixes(nil); err != nil {
+	if _, err := ApplyFixes(nil); err != nil {
 		t.Errorf("expected nil error for empty ops; got %v", err)
 	}
 }
@@ -197,5 +201,31 @@ func TestCountFixable(t *testing.T) {
 		if strings.Contains(f.Title, "Eager init") && f.Fixable() {
 			t.Error("slow-init findings should NOT be auto-fixable")
 		}
+	}
+}
+
+func TestApplyFixes_RefusesStaleFile(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTemp(t, dir, "zshenv", "export FOO=bar\nexport EDITED=yes\n")
+	ops := []FixOp{{File: path, Line: 2, OldLine: `export PATH="echo node:$PATH"`, NewLine: "# envset: x"}}
+	if _, err := ApplyFixes(ops); err == nil || !strings.Contains(err.Error(), "changed since the audit") {
+		t.Fatalf("expected stale-file error, got %v", err)
+	}
+	if got := readTemp(t, path); got != "export FOO=bar\nexport EDITED=yes\n" {
+		t.Fatalf("file must be untouched; got %q", got)
+	}
+}
+
+func TestApplyFixes_PreservesOtherBytes(t *testing.T) {
+	dir := t.TempDir()
+	orig := "export A=1\n\n\nexport PATH=\"echo node:$PATH\"\n\n# tail\n"
+	path := writeTemp(t, dir, "zshenv", orig)
+	ops := []FixOp{{File: path, Line: 4, OldLine: `export PATH="echo node:$PATH"`, NewLine: `# envset: export PATH="echo node:$PATH"`}}
+	if _, err := ApplyFixes(ops); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(orig, `export PATH="echo node:$PATH"`, `# envset: export PATH="echo node:$PATH"`, 1)
+	if got := readTemp(t, path); got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
 	}
 }

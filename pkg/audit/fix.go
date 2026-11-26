@@ -1,12 +1,13 @@
 package audit
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/experimentalist/envset/pkg/targets"
 )
 
 // FixOp is a single comment-out edit derived from a Finding.Fix.
@@ -117,15 +118,18 @@ func PrintDiff(w io.Writer, ops []FixOp) {
 	}
 }
 
-// ApplyFixes applies all fix operations to disk. For each unique file touched,
-// a backup is written to <file>.envset.bak before the edits are applied.
-// Errors are returned immediately; any files already written are NOT rolled back.
-func ApplyFixes(ops []FixOp) error {
+// ApplyFixes applies all fix operations to disk and returns, per file, the
+// backup of its previous contents (see `envset restore`).
+//
+// Every file is verified before anything is written: if a target line no
+// longer matches what the audit saw (the file was edited in the meantime),
+// nothing is written at all. Each file is then written atomically, after a
+// shell syntax check, with all other bytes preserved exactly.
+func ApplyFixes(ops []FixOp) (map[string]string, error) {
 	if len(ops) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	// Group ops by file.
 	byFile := map[string][]FixOp{}
 	var fileOrder []string
 	for _, op := range ops {
@@ -135,31 +139,49 @@ func ApplyFixes(ops []FixOp) error {
 		byFile[op.File] = append(byFile[op.File], op)
 	}
 
+	type planned struct {
+		raw, next []byte
+	}
+	plans := map[string]planned{}
 	for _, file := range fileOrder {
-		lines, err := readLines(file)
+		raw, err := os.ReadFile(file)
 		if err != nil {
-			return fmt.Errorf("reading %s: %w", file, err)
+			return nil, fmt.Errorf("reading %s: %w", file, err)
 		}
-
-		// Create backup before any mutation.
-		if err := writeLines(file+".envset.bak", lines); err != nil {
-			return fmt.Errorf("creating backup %s.envset.bak: %w", file, err)
-		}
-
-		// Apply comment-out edits.
+		content := string(raw)
+		trailingNL := strings.HasSuffix(content, "\n")
+		lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 		for _, op := range byFile[file] {
 			if op.Line < 1 || op.Line > len(lines) {
-				continue
+				return nil, fmt.Errorf("%s changed since the audit (line %d no longer exists); re-run `envset audit --fix`", file, op.Line)
 			}
-			lines[op.Line-1] = op.NewLine
+			cur := lines[op.Line-1]
+			if strings.TrimSuffix(cur, "\r") != op.OldLine {
+				return nil, fmt.Errorf("%s changed since the audit (line %d is now %q); re-run `envset audit --fix`", file, op.Line, cur)
+			}
+			if strings.HasSuffix(cur, "\r") {
+				lines[op.Line-1] = op.NewLine + "\r"
+			} else {
+				lines[op.Line-1] = op.NewLine
+			}
 		}
-
-		if err := writeLines(file, lines); err != nil {
-			return fmt.Errorf("writing %s: %w", file, err)
+		next := strings.Join(lines, "\n")
+		if trailingNL {
+			next += "\n"
 		}
+		plans[file] = planned{raw: raw, next: []byte(next)}
 	}
 
-	return nil
+	backups := map[string]string{}
+	for _, file := range fileOrder {
+		pl := plans[file]
+		b, err := targets.CommitFile(file, targets.ShellForPath(file), pl.raw, true, pl.next, 0o644)
+		if err != nil {
+			return backups, fmt.Errorf("writing %s: %w", file, err)
+		}
+		backups[file] = b
+	}
+	return backups, nil
 }
 
 // CountFixable returns the number of findings in r that have an auto-fix.
@@ -171,19 +193,4 @@ func CountFixable(r Report) int {
 		}
 	}
 	return n
-}
-
-// ---------- helpers ----------
-
-func writeLines(path string, lines []string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	w := bufio.NewWriter(f)
-	for _, ln := range lines {
-		fmt.Fprintln(w, ln)
-	}
-	return w.Flush()
 }
