@@ -28,12 +28,19 @@ type Entry struct {
 	RawLine   string
 	LineNum   int
 	IsComment bool
+
+	// Set by shell targets from the surrounding file.
+	Inert    bool   // heredoc or multi-line string text: not a definition at all
+	Block    bool   // inside if, case, a loop, a function, braces or parens
+	Compound bool   // the line holds more (or less) than one whole definition
+	Comment  string // trailing comment, with the whitespace before it
 }
 
 // WriteOptions controls Add.
 type WriteOptions struct {
 	DryRun bool      // compute the change but do not write
 	Quote  QuoteMode // how the value is encoded (default: QuoteExpand)
+	Append bool      // never edit existing lines: add a new one that overrides them
 }
 
 // RemoveOptions controls Remove.

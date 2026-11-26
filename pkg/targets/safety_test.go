@@ -285,11 +285,10 @@ func TestSyntaxGuardBlocksBreakingEdit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not installed")
 	}
-	// Deleting the only statement inside an if-block leaves `then fi`, which
-	// bash rejects (zsh happens to accept empty bodies).
-	orig := "if true; then\n  export FOO=1\nfi\n"
+	// --raw is unchecked, so only the syntax guard stops an unbalanced quote.
+	orig := "export A=1\n"
 	st, path := newShell(t, ".bashrc", "bash", orig)
-	_, err := st.Remove("FOO", RemoveOptions{})
+	_, err := st.Add("FOO", `"unterminated`, VarTypeExport, WriteOptions{Quote: QuoteRaw})
 	if err == nil || !strings.Contains(err.Error(), "would not parse") {
 		t.Fatalf("expected syntax-guard refusal, got %v", err)
 	}

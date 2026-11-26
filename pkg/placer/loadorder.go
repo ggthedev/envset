@@ -16,7 +16,10 @@ import (
 type Definition struct {
 	File ConfigFile
 	Line int
-	Text string // the trimmed line
+	Text string // the trimmed line, without its trailing comment
+	// Conditional is true when the line is inside a block or holds more than
+	// this definition.
+	Conditional bool
 }
 
 // Definitions returns, for every registered file that actively defines key,
@@ -40,8 +43,9 @@ func (r *Registry) Definitions(key string) []Definition {
 			continue
 		}
 		for i := len(entries) - 1; i >= 0; i-- {
-			if !entries[i].IsComment {
-				out = append(out, Definition{File: f, Line: entries[i].LineNum, Text: strings.TrimSpace(entries[i].RawLine)})
+			if !entries[i].IsComment && !entries[i].Inert {
+				text := strings.TrimSuffix(strings.TrimRight(entries[i].RawLine, "\r"), entries[i].Comment)
+				out = append(out, Definition{File: f, Line: entries[i].LineNum, Text: strings.TrimSpace(text), Conditional: entries[i].Block || entries[i].Compound})
 				break
 			}
 		}

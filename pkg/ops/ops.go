@@ -2,6 +2,7 @@ package ops
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -28,7 +29,8 @@ const envsetVersion = "dev"
 // (so you can `eval "$(envset add ... --print-source)"`). All other output goes to stderr.
 //
 // quote selects value encoding: targets.QuoteExpand (default), QuoteLiteral or QuoteRaw.
-func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dryRun, autoYes, printSource bool) error {
+// appendNew (--append) adds a new line instead of editing existing ones.
+func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dryRun, autoYes, printSource, appendNew bool) error {
 	logger.Step("ops.Add")
 	logger.Input("key=%q value=%q target=%q type=%q quote=%q dry_run=%v auto_yes=%v print_source=%v",
 		key, redact(key, value), targetName, varTypeStr, quote, dryRun, autoYes, printSource)
@@ -100,7 +102,7 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 				// A dry run tells "update" apart from "already set" for the
 				// exact quoting the user asked for.
 				if t, err := targets.Factory(top.File.Name, info.HomeDir); err == nil {
-					if res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: true, Quote: quote}); err == nil {
+					if res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: true, Quote: quote, Append: appendNew}); err == nil {
 						if res.Outcome == targets.Unchanged {
 							fmt.Fprintln(infoOut, "Note: already set to this value.")
 						} else {
@@ -142,9 +144,9 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 	warnDuplicates(targetName, key)
 
 	logger.Step("write")
-	res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: dryRun, Quote: quote})
+	res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: dryRun, Quote: quote, Append: appendNew})
 	if err != nil {
-		return err
+		return showRefused(key, err)
 	}
 	dry := ""
 	if dryRun {
@@ -175,6 +177,22 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 		PrintReloadHint(t.Path(), targetName)
 	}
 	return nil
+}
+
+// showRefused prints the lines behind a refusal to the terminal. They are not
+// part of the error itself, which is logged. Secret values stay hidden.
+func showRefused(key string, err error) error {
+	var refused *targets.RefusedError
+	if errors.As(err, &refused) {
+		for _, e := range refused.Entries {
+			line := strings.TrimSpace(e.RawLine)
+			if detector.IsSecret(key) {
+				line = "[redacted]"
+			}
+			fmt.Fprintf(os.Stderr, "  line %d: %s\n", e.LineNum, line)
+		}
+	}
+	return err
 }
 
 // warnDuplicates tells the user, on stderr, when key is also defined in other
@@ -258,7 +276,7 @@ func Remove(key, value, targetName string, comment, dryRun, printSource bool) er
 	logger.Step("write")
 	res, err := t.Remove(key, targets.RemoveOptions{Comment: comment, DryRun: dryRun, Value: value})
 	if err != nil {
-		return err
+		return showRefused(key, err)
 	}
 	if len(res.Affected) == 0 {
 		fmt.Fprintf(infoOut, "No change: %s is already commented out in %s\n", key, t.Path())
@@ -337,7 +355,7 @@ func List(key, targetName string) error {
 		}
 		line := strings.TrimSpace(e.RawLine)
 		// Show definitions, not the shell's control flow (if/else/fi) or prose.
-		if line == "" || (e.Key == "" && !targets.IsDefinitionLine(line)) {
+		if line == "" || e.Inert || (e.Key == "" && !targets.IsDefinitionLine(line)) {
 			continue
 		}
 		fmt.Printf("  line %d: %s%s\n", e.LineNum, prefix, line)

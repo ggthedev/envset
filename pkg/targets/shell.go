@@ -1,7 +1,6 @@
 package targets
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,14 +108,12 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 		return AddResult{}, err
 	}
 	res := AddResult{Lines: newLines}
+	entries := s.entries(tf.lines)
 
-	active := func(i int) (Entry, string) {
-		e := s.parseLine(tf.lines[i], i+1)
-		return e, strings.TrimSpace(tf.lines[i])
-	}
+	// A line counts as already present only if it runs unconditionally.
 	hasActiveLine := func(want string) bool {
-		for i := range tf.lines {
-			if e, t := active(i); !e.IsComment && t == want {
+		for i, e := range entries {
+			if !e.IsComment && !e.Inert && !e.Block && strings.TrimSpace(tf.lines[i]) == want {
 				return true
 			}
 		}
@@ -124,29 +121,45 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 	}
 
 	if keyed(key, varType) {
-		last := -1
-		for i := range tf.lines {
-			if e, _ := active(i); !e.IsComment && e.Key == key && e.VarType == entryTypeFor(varType) {
-				last = i // the last definition is the one that wins
+		var defs []Entry
+		for _, e := range entries {
+			if !e.IsComment && !e.Inert && e.Key == key && e.VarType == entryTypeFor(varType) {
+				defs = append(defs, e)
+			}
+		}
+		last := -1 // the last definition is the one that wins
+		same := false
+		if len(defs) > 0 {
+			e := defs[len(defs)-1]
+			last = e.LineNum - 1
+			same = !e.Block && !e.Compound && withoutComment(tf.lines[last], e) == newLines[0]
+			if !same && !opts.Append && (e.Block || e.Compound) {
+				var unsafe []Entry
+				for _, d := range defs {
+					if d.Block || d.Compound {
+						unsafe = append(unsafe, d)
+					}
+				}
+				return AddResult{}, &RefusedError{Path: s.path, Key: key, Entries: unsafe, CanAppend: true}
 			}
 		}
 		switch {
-		case last < 0:
+		case last < 0 || (opts.Append && !same):
 			tf.appendLines(newLines...)
 			res.Outcome = Appended
-		case strings.TrimSpace(tf.lines[last]) == newLines[0]:
+		case same:
 			res.Outcome = Unchanged
 		default:
 			res.Outcome = Updated
 			res.LineNum = last + 1
 			res.Previous = tf.lines[last]
-			tf.lines[last] = leadingWS(tf.lines[last]) + newLines[0]
+			tf.lines[last] = leadingWS(tf.lines[last]) + newLines[0] + entries[last].Comment + lineEnding(tf.lines[last])
 		}
 		// export_and_path_append: make sure the companion PATH line exists.
 		if varType == VarTypeExportAndPathAppend && res.Outcome != Appended {
 			if !hasActiveLine(newLines[1]) && !hasActiveLine(companionPathLines(key)[1]) {
 				idx := last + 1
-				tf.lines = append(tf.lines[:idx], append([]string{newLines[1]}, tf.lines[idx:]...)...)
+				tf.lines = append(tf.lines[:idx], append([]string{newLines[1] + lineEnding(tf.lines[last])}, tf.lines[idx:]...)...)
 				if res.Outcome == Unchanged {
 					res.Outcome = Updated
 					res.LineNum = idx + 1
@@ -165,6 +178,16 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 		} else {
 			tf.appendLines(newLines...)
 			res.Outcome = Appended
+		}
+	}
+
+	// An appended line must not be swallowed by an unterminated heredoc,
+	// string or continued line. (Unclosed blocks are left to the syntax guard:
+	// a file that parses has none.)
+	if res.Outcome == Appended {
+		infos := scanShell(tf.lines, s.shell == "fish")
+		if first := infos[len(tf.lines)-len(newLines)]; first.Inert || first.Continued {
+			return AddResult{}, fmt.Errorf("not appending to %s: it ends inside an unterminated string, heredoc or continued line; fix that first", s.path)
 		}
 	}
 
@@ -201,16 +224,22 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 	}
 
 	var res RemoveResult
+	var unsafe []Entry
 	hit := map[int]bool{}
-	for i, line := range tf.lines {
-		e := s.parseLine(line, i+1)
+	for i, e := range s.entries(tf.lines) {
+		if e.Inert {
+			continue
+		}
+		line := tf.lines[i]
 		match := e.Key == key && (opts.Value == "" || strings.Contains(e.Value, opts.Value))
 		if !match && key != "PATH" {
 			t := strings.TrimSpace(line)
 			if e.IsComment {
 				t = strings.TrimSpace(strings.TrimPrefix(t, "#"))
 			}
-			match = isCompanion(t, key)
+			if match = isCompanion(t, key); match {
+				e.Compound = false // the exact line envset writes
+			}
 		}
 		if !match {
 			continue
@@ -219,8 +248,14 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 			res.Skipped++
 			continue
 		}
+		if !e.IsComment && (e.Block || e.Compound) {
+			unsafe = append(unsafe, e)
+		}
 		hit[i] = true
 		res.Affected = append(res.Affected, e)
+	}
+	if len(unsafe) > 0 {
+		return RemoveResult{}, &RefusedError{Path: s.path, Key: key, Entries: unsafe}
 	}
 
 	if len(res.Affected) == 0 {
@@ -252,27 +287,31 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 
 // List returns entries matching key (empty key returns all).
 func (s *ShellTarget) List(key string) ([]Entry, error) {
-	f, err := os.Open(s.path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
+	tf, err := readTextFile(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", s.path, err)
+		return nil, err
 	}
-	defer f.Close()
-
 	var entries []Entry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	lineNum := 0
-	for scanner.Scan() {
-		lineNum++
-		entry := s.parseLine(scanner.Text(), lineNum)
-		if key == "" || entry.Key == key {
-			entries = append(entries, entry)
+	for _, e := range s.entries(tf.lines) {
+		if key == "" || e.Key == key {
+			entries = append(entries, e)
 		}
 	}
-	return entries, scanner.Err()
+	return entries, nil
+}
+
+// withoutComment is the line's statement, without indentation or comment.
+func withoutComment(line string, e Entry) string {
+	line = strings.TrimSuffix(line, "\r")
+	return strings.TrimSpace(strings.TrimSuffix(line, e.Comment))
+}
+
+// lineEnding preserves CRLF files line by line.
+func lineEnding(line string) string {
+	if strings.HasSuffix(line, "\r") {
+		return "\r"
+	}
+	return ""
 }
 
 func (s *ShellTarget) Preview(key, value string, varType VarType, quote QuoteMode) (string, error) {

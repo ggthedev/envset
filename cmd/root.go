@@ -38,6 +38,7 @@ var (
 	restoreBackup string
 
 	shellFlag string
+	appendNew bool
 )
 
 var rootCmd = &cobra.Command{
@@ -75,8 +76,10 @@ var addCmd = &cobra.Command{
 	Short: "Add an environment variable",
 	Long: `Add or set an environment variable in a shell config file.
 
-Adding a key that already exists updates it in place; adding an identical
-line again is a no-op.
+Adding a key that already exists updates it in place (keeping any trailing
+comment); adding an identical line again is a no-op. If the key is set inside a
+block (if, case, loop, function) or shares its line with other code, envset
+refuses; --append adds a new line at the end that overrides it.
 
 Value encoding:
   (default)   literal text, except $VAR / ${VAR} expand and a leading ~/ means $HOME/.
@@ -93,7 +96,7 @@ Value encoding:
 		} else if raw {
 			quote = targets.QuoteRaw
 		}
-		return ops.Add(key, value, targetName, varType, quote, dryRun, yes, printSource)
+		return ops.Add(key, value, targetName, varType, quote, dryRun, yes, printSource, appendNew)
 	},
 }
 
@@ -219,6 +222,7 @@ func init() {
 	addCmd.Flags().BoolVar(&yes, "yes", false, "Auto-confirm placer suggestions when --target is omitted")
 	addCmd.Flags().BoolVar(&printSource, "print-source", false, "After writing, print only `source <file>` to stdout (eval-friendly)")
 	addCmd.Flags().BoolVar(&literal, "literal", false, "Store the value verbatim in single quotes (no $VAR expansion)")
+	addCmd.Flags().BoolVar(&appendNew, "append", false, "Add a new line at the end instead of editing existing ones")
 	addCmd.Flags().BoolVar(&raw, "raw", false, "Write the value unquoted and unchecked (allows $(...) — use with care)")
 
 	// remove flags

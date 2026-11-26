@@ -180,6 +180,9 @@ func (p *Placer) preferEffective(placements []Placement, defs []Definition) []Pl
 
 // holdsLine reports whether the definition is already exactly the new line.
 func (p *Placer) holdsLine(d Definition, intent Intent) bool {
+	if d.Conditional {
+		return false
+	}
 	t, err := targets.Factory(d.File.Name, p.Registry.Home)
 	if err != nil {
 		return false
