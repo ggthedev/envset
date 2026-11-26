@@ -15,6 +15,7 @@ import (
 	"github.com/experimentalist/envset/pkg/placer"
 	"github.com/experimentalist/envset/pkg/rules"
 	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/experimentalist/envset/pkg/term"
 	"github.com/experimentalist/envset/pkg/wizard"
 )
 
@@ -46,8 +47,12 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 		key = "PATH"
 	}
 
-	// If any required flag is missing, run wizard
+	// If any required flag is missing, run the wizard — but only when a human
+	// can answer it. Under cron, pipes, eval "$(…)" or with --yes, fail fast.
 	if key == "" || value == "" {
+		if autoYes || !term.Interactive() {
+			return fmt.Errorf("--key and --value are required when not running interactively (or with --yes)")
+		}
 		logger.Trace("add: missing required input — entering wizard")
 		var confirmed bool
 		key, value, targetName, varType, confirmed, err = wizard.RunAddWizard(dryRun)
@@ -160,7 +165,7 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 	if printSource {
 		PrintSourceCommand(os.Stdout, t.Path())
 	} else {
-		PrintReloadHint(t.Path())
+		PrintReloadHint(t.Path(), targetName)
 	}
 	return nil
 }
@@ -199,6 +204,9 @@ func Remove(key, value, targetName string, comment, dryRun, printSource bool) er
 	}
 
 	if key == "" || targetName == "" {
+		if !term.Interactive() {
+			return fmt.Errorf("--key and --target are required when not running interactively")
+		}
 		logger.Trace("remove: missing input — entering wizard")
 		var confirmed bool
 		var err error
@@ -254,7 +262,7 @@ func Remove(key, value, targetName string, comment, dryRun, printSource bool) er
 	if printSource {
 		PrintSourceCommand(os.Stdout, t.Path())
 	} else {
-		PrintReloadHint(t.Path())
+		PrintReloadHint(t.Path(), targetName)
 	}
 	return nil
 }
@@ -265,6 +273,9 @@ func List(key, targetName string) error {
 	logger.Input("key=%q target=%q", key, targetName)
 
 	if targetName == "" {
+		if !term.Interactive() {
+			return fmt.Errorf("--target is required when not running interactively")
+		}
 		logger.Trace("list: target missing — entering wizard")
 		var err error
 		targetName, err = wizard.RunListWizard()
@@ -354,9 +365,11 @@ func Detect() error {
 // Audit scans every registered config file for placement / performance issues
 // and prints a human-readable report.
 //
-//   - fix=true:    also compute and display a diff preview of auto-fixes.
-//   - dryRun=true: show the diff but do not write anything (implies fix).
-//   - yes=true:    apply all fixes without an interactive confirmation prompt.
+//   - plain:        read-only report.
+//   - dryRun=true:  also show the diff of every auto-fix; never prompts, never
+//     writes (with or without --fix).
+//   - fix=true:     interactive per-finding review (needs a terminal), or with
+//     yes=true apply every auto-fix without prompting.
 //
 // Returns a non-nil error iff any finding has severity "error" (after fixes are
 // applied in fix mode the report is re-evaluated).
@@ -391,7 +404,20 @@ func Audit(fix, dryRun, yes bool) error {
 	}
 	audit.PrintReport(os.Stdout, r)
 
-	if fix || dryRun {
+	if dryRun {
+		fixOps, err := audit.BuildFixOps(r)
+		if err != nil {
+			return fmt.Errorf("building fix ops: %w", err)
+		}
+		audit.PrintDiff(os.Stdout, fixOps)
+		if len(fixOps) > 0 {
+			fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
+		}
+		logger.Result("audit --dry-run: %d op(s) previewed, nothing written", len(fixOps))
+	} else if fix {
+		if !yes && !term.Interactive() {
+			return fmt.Errorf("audit --fix needs a terminal for its review; use --yes to apply all fixes non-interactively, or --dry-run to preview")
+		}
 		applied, err := runAuditFix(r, &custom, ideals, dryRun, yes)
 		if err != nil {
 			return err
@@ -584,7 +610,7 @@ reviewLoop:
 // allowApply controls whether 'a' is accepted.
 func promptChoice(r *bufio.Reader, opts string, allowApply bool) string {
 	for {
-		fmt.Fprintf(os.Stdout, "    choice %s: ", opts)
+		fmt.Fprintf(os.Stderr, "    choice %s: ", opts)
 		line, err := r.ReadString('\n')
 		if err != nil {
 			return "q"
@@ -598,14 +624,14 @@ func promptChoice(r *bufio.Reader, opts string, allowApply bool) string {
 		case "s", "o", "q":
 			return c
 		}
-		fmt.Fprintln(os.Stdout, "    invalid choice; try again")
+		fmt.Fprintln(os.Stderr, "    invalid choice; try again")
 	}
 }
 
 // buildCustomRule prompts for the optional reason and constructs a CustomRule
 // from the finding. Subject is preferred; LineHash is recorded as fallback.
 func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rules.CustomRule {
-	fmt.Fprint(os.Stdout, "    reason (optional, press Enter to skip): ")
+	fmt.Fprint(os.Stderr, "    reason (optional, press Enter to skip): ")
 	reasonLine, _ := r.ReadString('\n')
 	reason := strings.TrimSpace(reasonLine)
 
@@ -821,6 +847,6 @@ func Restore(targetName, backupPath string, list, dryRun bool) error {
 	fmt.Printf("Restored %s from %s\n", fsutil.Tilde(t.Path()), fsutil.Tilde(restored))
 	fmt.Println("The previous contents were saved first; see `envset restore --list`.")
 	logger.Result("restore: %s from %s", t.Path(), restored)
-	PrintReloadHint(t.Path())
+	PrintReloadHint(t.Path(), targetName)
 	return nil
 }

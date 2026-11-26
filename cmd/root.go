@@ -188,6 +188,11 @@ report:
   - eager init of slow tools that should be lazy-loaded
   - keys defined in multiple files (dead code)
 
+  envset audit              read-only report
+  envset audit --dry-run    report + diff of every auto-fix; never prompts or writes
+  envset audit --fix        review each finding interactively (needs a terminal)
+  envset audit --fix --yes  apply every auto-fix without prompting
+
 Exits non-zero if any error-level finding is reported.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return ops.Audit(auditFix, auditDryRun, auditYes)
@@ -236,7 +241,7 @@ func init() {
 
 	// audit flags
 	auditCmd.Flags().BoolVar(&auditFix, "fix", false, "Apply safe automatic fixes (comment out broken lines)")
-	auditCmd.Flags().BoolVar(&auditDryRun, "dry-run", false, "Preview fixes without writing (use with --fix)")
+	auditCmd.Flags().BoolVar(&auditDryRun, "dry-run", false, "Show the diff of every auto-fix without prompting or writing")
 	auditCmd.Flags().BoolVar(&auditYes, "yes", false, "Apply all fixes without interactive confirmation")
 
 	// lazy flags

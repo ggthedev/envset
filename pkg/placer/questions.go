@@ -2,6 +2,8 @@ package placer
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/term"
+	"os"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -21,7 +23,7 @@ func AskScope() (Scope, error) {
 		Default: "All sessions (scripts, cron, background processes too)",
 		Help:    "This determines which config file the entry goes into.",
 	}
-	if err := survey.AskOne(prompt, &choice); err != nil {
+	if err := term.Ask(prompt, &choice); err != nil {
 		return ScopeUnknown, err
 	}
 
@@ -46,7 +48,7 @@ func AskSystemOrUser() (bool, error) {
 		Default: false,
 		Help:    "System settings go to all-sessions files. Personal preferences go to interactive files.",
 	}
-	if err := survey.AskOne(prompt, &isSystem); err != nil {
+	if err := term.Ask(prompt, &isSystem); err != nil {
 		return false, err
 	}
 	return isSystem, nil
@@ -58,26 +60,26 @@ func AskSystemOrUser() (bool, error) {
 // before answering yes/no.
 func AskPlacementConfirmation(pl Placement, reg *Registry) (bool, string, error) {
 	var confirm bool
-	fmt.Printf("\nSuggested file: %s (%s)\n", pl.File.Name, pl.File.Path)
-	fmt.Printf("Reason: %s (confidence: %.0f%%)\n", pl.Reason, pl.Confidence*100)
+	fmt.Fprintf(os.Stderr, "\nSuggested file: %s (%s)\n", pl.File.Name, pl.File.Path)
+	fmt.Fprintf(os.Stderr, "Reason: %s (confidence: %.0f%%)\n", pl.Reason, pl.Confidence*100)
 	if pl.Update {
-		fmt.Println("Note: This key already exists — it will be updated.")
+		fmt.Fprintln(os.Stderr, "Note: This key already exists — it will be updated.")
 	}
 	if pl.ScopeMismatch {
-		fmt.Printf("⚠ Effective scope is %s, not %s — variables may not reach all the shells you expect.\n",
+		fmt.Fprintf(os.Stderr, "⚠ Effective scope is %s, not %s — variables may not reach all the shells you expect.\n",
 			pl.EffectiveScope, pl.File.Scope)
 	}
 	if len(pl.DuplicateLocations) > 0 {
-		fmt.Printf("⚠ Same key also defined in: %s — those copies will be shadowed.\n",
+		fmt.Fprintf(os.Stderr, "⚠ Same key also defined in: %s — those copies will be shadowed.\n",
 			strings.Join(pl.DuplicateLocations, ", "))
 	}
-	fmt.Println()
+	fmt.Fprintln(os.Stderr)
 
 	prompt := &survey.Confirm{
 		Message: "Use this file?",
 		Default: pl.Confidence >= 0.75,
 	}
-	if err := survey.AskOne(prompt, &confirm); err != nil {
+	if err := term.Ask(prompt, &confirm); err != nil {
 		return false, "", err
 	}
 
@@ -110,10 +112,10 @@ func AskScopeMismatchResolution(broken Placement, primary ConfigFile, intentScop
 		primary.Name, intentScope)
 	optBail := "Cancel — let me fix the source-chain first (run: envset audit)"
 
-	fmt.Printf("\n⚠ Scope mismatch detected:\n")
-	fmt.Printf("    %s is declared %s but is only reachable from %s shells.\n",
+	fmt.Fprintf(os.Stderr, "\n⚠ Scope mismatch detected:\n")
+	fmt.Fprintf(os.Stderr, "    %s is declared %s but is only reachable from %s shells.\n",
 		broken.File.Name, broken.File.Scope, broken.EffectiveScope)
-	fmt.Printf("    Your variable wants %s scope.\n\n", intentScope)
+	fmt.Fprintf(os.Stderr, "    Your variable wants %s scope.\n\n", intentScope)
 
 	var choice string
 	prompt := &survey.Select{
@@ -121,7 +123,7 @@ func AskScopeMismatchResolution(broken Placement, primary ConfigFile, intentScop
 		Options: []string{optBroken, optPrimary, optBail},
 		Default: optPrimary,
 	}
-	if err := survey.AskOne(prompt, &choice); err != nil {
+	if err := term.Ask(prompt, &choice); err != nil {
 		return "", err
 	}
 	switch choice {
@@ -179,7 +181,7 @@ func AskTargetPick(registry *Registry) (string, error) {
 		Message: "Choose target file:",
 		Options: names,
 	}
-	if err := survey.AskOne(prompt, &choice); err != nil {
+	if err := term.Ask(prompt, &choice); err != nil {
 		return "", err
 	}
 
