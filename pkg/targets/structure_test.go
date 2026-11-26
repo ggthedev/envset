@@ -53,6 +53,10 @@ func TestRefusesToDamageHandWrittenCode(t *testing.T) {
 		"inside subshell":  "(\n  export K=s\n)\n",
 		"top then block":   "export K=top\nif true; then\n  export K=a\nfi\n",
 		"nested blocks":    "if a; then\n  if b; then\n    :\n  fi\n  export K=n\nfi\n",
+		"after &&":         "false &&\n  export K=a\n",
+		"after ||":         "true ||\n  export K=a\n",
+		"after pipe":       "echo |\n  export K=a\n",
+		"after && comment": "false && # why\n\n  # more\n  export K=a\n",
 	}
 	for name, body := range cases {
 		for _, shell := range []string{"zshrc", "bashrc"} {
@@ -132,6 +136,12 @@ func TestTopLevelLinesStayEditable(t *testing.T) {
 		"x=$'a\\'b'\n",
 		"[[ $a =~ '^(x|y)$' ]] && echo\n",
 		"y=`echo \"a)\"`\n",
+		"true && echo a || echo b\n",
+		"sleep 0 &\n",
+		"ls | wc -l\n",
+		"false &&\n  echo joined\n",
+		"case $x in\n  a) echo ;|\n  b) ;;\nesac\n",
+		"case $x in\n  a) echo ;&\n  b) ;;\nesac\n",
 	}
 	for _, pre := range preludes {
 		st, p := shellTarget(t, "zshrc", pre+"export K=1  # why\n")

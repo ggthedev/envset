@@ -15,7 +15,7 @@ import (
 type lineInfo struct {
 	Inert     bool // heredoc text or the inside of a multi-line string: not code
 	Depth     int  // blocks (if, case, loop, function, braces, parens) open at line start
-	Continued bool // continues the previous line (trailing backslash)
+	Continued bool // continues the previous line (trailing backslash, &&, || or |)
 
 	Words     int  // top-level words
 	HasOp     bool // a top-level ; & | < > or subshell paren
@@ -44,6 +44,7 @@ type scanner struct {
 	blocks    int
 	docs      []heredoc // announced; bodies start on the next line
 	continued bool
+	pending   bool // the last code line ended in &&, || or |
 	cmdPos    bool // the next word starts a command
 	afterElse bool
 }
@@ -98,10 +99,12 @@ func scanShell(lines []string, fish bool) []lineInfo {
 }
 
 func (s *scanner) line(line string) lineInfo {
-	info := lineInfo{Inert: s.inString(), Depth: s.depth(), Continued: s.continued, CommentAt: -1}
+	info := lineInfo{Inert: s.inString(), Depth: s.depth(), Continued: s.continued || s.pending, CommentAt: -1}
 	base := len(s.stack)
 	s.continued = false
-	if base == 0 && !info.Continued {
+	joins := false // the latest top-level token is &&, || or |
+	code := false  // the line has something other than blanks and a comment
+	if base == 0 && !s.continued {
 		s.cmdPos = true
 	}
 
@@ -115,6 +118,7 @@ func (s *scanner) line(line string) lineInfo {
 		s.keyword(word.String())
 		if len(s.stack) <= base {
 			info.Words++
+			joins, code = false, true
 		}
 		word.Reset()
 		started = false
@@ -122,6 +126,7 @@ func (s *scanner) line(line string) lineInfo {
 	op := func() {
 		if len(s.stack) <= base {
 			info.HasOp = true
+			joins, code = false, true
 		}
 	}
 
@@ -234,6 +239,15 @@ func (s *scanner) line(line string) lineInfo {
 		case ';', '&', '|':
 			end()
 			op()
+			switch {
+			case c == ';' && (at(i+1) == ';' || at(i+1) == '&' || at(i+1) == '|'):
+				i++ // case terminators ;; ;& ;|
+			case c == '&' && at(i+1) == '&', c == '|' && (at(i+1) == '|' || at(i+1) == '&'):
+				i++
+				joins = len(s.stack) <= base
+			case c == '|' && !(i > 0 && line[i-1] == '>'): // not the ">|" redirect
+				joins = len(s.stack) <= base
+			}
 			s.cmdPos = true
 		case '<':
 			if s.top() != inArith && at(i+1) == '<' && at(i+2) != '<' && !s.fish {
@@ -295,7 +309,10 @@ func (s *scanner) line(line string) lineInfo {
 		}
 	}
 	end()
-	info.Open = s.continued || len(s.stack) > base
+	if code { // blank and comment lines keep a pending && || | alive
+		s.pending = joins
+	}
+	info.Open = s.continued || joins || len(s.stack) > base
 	return info
 }
 
@@ -443,7 +460,7 @@ func (e *RefusedError) Error() string {
 		why = append(why, "set inside a block (if, case, loop or function)")
 	}
 	if compound {
-		why = append(why, "on a line that holds more than this one definition")
+		why = append(why, "on a line that holds more than this one definition or continues another")
 	}
 	msg := fmt.Sprintf("not changing %s in %s: it is %s (line %s); edit it by hand",
 		e.Key, e.Path, strings.Join(why, " and "), strings.Join(nums, ", "))
