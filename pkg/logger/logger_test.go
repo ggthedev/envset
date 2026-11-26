@@ -257,3 +257,21 @@ func TestRotate(t *testing.T) {
 		t.Error("small log was rotated")
 	}
 }
+
+// Without a home directory there is nowhere to log; never write into the cwd.
+func TestNoLogWithoutHome(t *testing.T) {
+	for _, k := range []string{"HOME", EnvLogFile, EnvLogDir, "XDG_CONFIG_HOME"} {
+		t.Setenv(k, "")
+	}
+	proj := t.TempDir()
+	wd, _ := os.Getwd()
+	os.Chdir(proj)
+	defer os.Chdir(wd)
+
+	Init(false, []string{"envset", "detect"})
+	Info("x")
+	Close()
+	if entries, _ := os.ReadDir(proj); len(entries) != 0 {
+		t.Fatalf("created %v in the working directory", entries)
+	}
+}

@@ -148,7 +148,9 @@ func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
 	}
 
 	dir := filepath.Dir(real)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+".envset-tmp-*")
+	prefix := "." + filepath.Base(real) + ".envset-tmp-"
+	removeStaleTemps(dir, prefix)
+	tmp, err := os.CreateTemp(dir, prefix+"*")
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}
@@ -178,6 +180,20 @@ func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
 	}
 	ok = true
 	return nil
+}
+
+// removeStaleTemps deletes temp files that a killed run left behind. Only old
+// ones: a recent file may belong to a write that is still in progress.
+func removeStaleTemps(dir, prefix string) {
+	matches, err := filepath.Glob(filepath.Join(globEscape(dir), globEscape(prefix)+"*"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		if fi, err := os.Lstat(m); err == nil && fi.Mode().IsRegular() && time.Since(fi.ModTime()) > time.Hour {
+			os.Remove(m)
+		}
+	}
 }
 
 // ---------- backups ----------

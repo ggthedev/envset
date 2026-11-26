@@ -153,11 +153,6 @@ func scopeBroaderOrEqual(a, b Scope) bool {
 	return scopeRank(a) >= scopeRank(b)
 }
 
-// scopeBroader returns true if a reaches strictly more shells than b.
-func scopeBroader(a, b Scope) bool {
-	return scopeRank(a) > scopeRank(b)
-}
-
 // expandHomePath expands a leading "~/" or "$HOME/" to the supplied home dir.
 func expandHomePath(p, home string) string {
 	if home == "" {

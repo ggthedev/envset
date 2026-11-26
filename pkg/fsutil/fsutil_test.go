@@ -181,3 +181,30 @@ func TestLockAllWithAliasesDoesNotDeadlock(t *testing.T) {
 	}
 	u()
 }
+
+// Temp files left by a killed run are removed by a later write; recent ones
+// (possibly in use) and unrelated files are kept.
+func TestStaleTempFilesAreCleaned(t *testing.T) {
+	dir := setup(t)
+	p := filepath.Join(dir, ".zshrc")
+	stale := filepath.Join(dir, "..zshrc.envset-tmp-111")
+	fresh := filepath.Join(dir, "..zshrc.envset-tmp-222")
+	other := filepath.Join(dir, "..zshenv.envset-tmp-333")
+	for _, f := range []string{stale, fresh, other} {
+		os.WriteFile(f, []byte("x"), 0o600)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(stale, old, old)
+	os.Chtimes(other, old, old)
+	if err := WriteFileAtomic(p, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("stale temp file kept")
+	}
+	for _, f := range []string{fresh, other} {
+		if _, err := os.Stat(f); err != nil {
+			t.Errorf("%s removed", filepath.Base(f))
+		}
+	}
+}

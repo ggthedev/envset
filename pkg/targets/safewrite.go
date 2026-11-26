@@ -55,8 +55,19 @@ func (tf *textFile) bytes() []byte {
 	return []byte(s)
 }
 
-// appendLines adds lines at the end, ensuring the file ends with a newline.
+// appendLines adds lines at the end, ensuring the file ends with a newline
+// and using CRLF if the file does.
 func (tf *textFile) appendLines(add ...string) {
+	if n := len(tf.lines); n > 0 && strings.HasSuffix(tf.lines[0], "\r") {
+		if !strings.HasSuffix(tf.lines[n-1], "\r") {
+			tf.lines[n-1] += "\r"
+		}
+		crlf := make([]string, len(add))
+		for i, l := range add {
+			crlf[i] = l + "\r"
+		}
+		add = crlf
+	}
 	tf.lines = append(tf.lines, add...)
 	tf.trailingNL = true
 }

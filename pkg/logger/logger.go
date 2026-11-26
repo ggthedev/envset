@@ -35,6 +35,10 @@ var global *Logger
 // is printed to stderr and subsequent calls become no-ops.
 func Init(verbose bool, argv []string) {
 	path := ResolveLogPath()
+	if path == "" {
+		global = &Logger{disabled: true}
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "envset: cannot create log dir %s: %v (logging disabled)\n", filepath.Dir(path), err)
 		global = &Logger{disabled: true}

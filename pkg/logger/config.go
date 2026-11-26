@@ -26,6 +26,8 @@ const (
 //     or ~/.config/envset
 //  4. <config>/logs/envset.log  (default)
 //
+// It returns "" when none applies because no home directory is known.
+//
 // A .env in the current directory is deliberately NOT consulted: running
 // envset inside some project must not redirect its log.
 //
@@ -41,9 +43,11 @@ func ResolveLogPath() string {
 		return filepath.Join(expandHome(d, home), defaultFile)
 	}
 
+	// Without a config directory (no $HOME) there is nowhere to log: a
+	// relative path would write into whatever directory envset runs in.
 	cfg, err := fsutil.ConfigDir()
 	if err != nil {
-		cfg = filepath.Join(home, ".config", "envset")
+		return ""
 	}
 
 	// 3: envset's own .env
