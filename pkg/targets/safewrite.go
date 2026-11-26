@@ -89,6 +89,9 @@ func ShellForPath(path string) string {
 // newMode applies only when the file is created. Returns the backup path
 // ("" when the file did not exist before).
 func CommitFile(path, shell string, oldData []byte, existed bool, newData []byte, newMode os.FileMode) (string, error) {
+	if err := fsutil.CheckWritable(path); err != nil {
+		return "", err
+	}
 	if err := syntaxGuard(shell, oldData, existed, newData); err != nil {
 		return "", err
 	}

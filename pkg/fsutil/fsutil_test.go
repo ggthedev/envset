@@ -138,3 +138,20 @@ func TestBackupsDoNotMixFiles(t *testing.T) {
 		t.Fatalf("backups of %s: %+v", a, la)
 	}
 }
+
+// chmod 400 means "do not change this": a rename must not bypass it.
+func TestReadOnlyFileIsRespected(t *testing.T) {
+	dir := setup(t)
+	p := filepath.Join(dir, "rc")
+	os.WriteFile(p, []byte("keep"), 0o400)
+	link := filepath.Join(dir, "link")
+	os.Symlink(p, link)
+	for _, path := range []string{p, link} {
+		if err := WriteFileAtomic(path, []byte("new"), 0o644); err == nil || !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("%s: err = %v", path, err)
+		}
+	}
+	if got, _ := os.ReadFile(p); string(got) != "keep" {
+		t.Fatalf("content %q", got)
+	}
+}

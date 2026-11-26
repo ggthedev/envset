@@ -63,6 +63,19 @@ func ResolvePath(path string) (string, error) {
 	return dest, nil
 }
 
+// CheckWritable refuses a file whose owner write bit is off. Replacing a file
+// by rename would otherwise ignore "chmod a-w". A missing file is writable.
+func CheckWritable(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil // missing or unreadable: the write itself will report it
+	}
+	if fi.Mode().Perm()&0o200 == 0 {
+		return fmt.Errorf("%s is read-only (mode %04o); run `chmod u+w` on it if you want envset to change it", path, fi.Mode().Perm())
+	}
+	return nil
+}
+
 // WriteFileAtomic replaces path's contents with data such that a crash,
 // kill or full disk never leaves a truncated file: data goes to a temp file in
 // the same directory, is fsynced, then renamed over the target. Symlinks are
@@ -72,6 +85,9 @@ func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
 	real, err := ResolvePath(path)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", path, err)
+	}
+	if err := CheckWritable(real); err != nil {
+		return err
 	}
 	mode := newMode
 	if fi, err := os.Stat(real); err == nil {
