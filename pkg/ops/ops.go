@@ -186,7 +186,8 @@ func showRefused(key string, err error) error {
 	if errors.As(err, &refused) {
 		for _, e := range refused.Entries {
 			line := strings.TrimSpace(e.RawLine)
-			if detector.IsSecret(key) {
+			// The line may hold other variables than the one asked about.
+			if detector.IsSecret(key) || detector.IsSecret(line) {
 				line = "[redacted]"
 			}
 			fmt.Fprintf(os.Stderr, "  line %d: %s\n", e.LineNum, line)

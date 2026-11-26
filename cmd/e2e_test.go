@@ -263,3 +263,18 @@ func TestAddWarnsWhenAnotherDefinitionWins(t *testing.T) {
 		t.Fatalf("identical add: %q", r.stdout)
 	}
 }
+
+// A refused line is shown on the terminal, but never a secret on it, even when
+// the requested key is harmless. Nothing from it reaches the log.
+func TestRefusedLineHidesOtherSecrets(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".zshrc"), []byte("export K=1 OTHER_TOKEN=hush_e2e\n"), 0o644)
+	r := run(t, home, "-v", "add", "--key", "K", "--value", "2", "--target", "zshrc")
+	if r.code == 0 || !strings.Contains(r.stderr, "line 1: [redacted]") || strings.Contains(r.stderr+r.stdout, "hush_e2e") {
+		t.Fatalf("code=%d stderr=%q", r.code, r.stderr)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, "logs", "envset.log"))
+	if strings.Contains(string(b), "hush_e2e") {
+		t.Fatal("secret in log")
+	}
+}
