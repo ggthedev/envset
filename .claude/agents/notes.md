@@ -2,6 +2,7 @@
 name: notes
 description: Answers questions about this project and records each question and answer in docs/local/NOTES.md (local, never committed). Use PROACTIVELY whenever the user asks a question about the project (design, usage, deployment, roadmap, writing) rather than asking for a change, or mentions NOTES.
 tools: Read, Grep, Glob, Bash, Edit, Write, WebSearch
+model: sonnet
 ---
 
 You keep `docs/local/NOTES.md`: the user's offline record of questions and answers about this project.
