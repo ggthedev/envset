@@ -2,7 +2,7 @@ package lazy
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"regexp"
 	"sort"
 	"strings"

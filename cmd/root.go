@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/detector"
-	"github.com/experimentalist/envset/pkg/lazy"
-	"github.com/experimentalist/envset/pkg/logger"
-	"github.com/experimentalist/envset/pkg/ops"
-	"github.com/experimentalist/envset/pkg/targets"
-	"github.com/experimentalist/envset/pkg/version"
+	"github.com/ggthedev/envset/pkg/detector"
+	"github.com/ggthedev/envset/pkg/lazy"
+	"github.com/ggthedev/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/ops"
+	"github.com/ggthedev/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/version"
 	"github.com/spf13/cobra"
 )
 

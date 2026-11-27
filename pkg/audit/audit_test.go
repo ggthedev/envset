@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/experimentalist/envset/pkg/placer"
+	"github.com/ggthedev/envset/pkg/placer"
 )
 
 // helper to create a fake home with the requested files and run an audit

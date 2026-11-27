@@ -1,4 +1,4 @@
-module github.com/experimentalist/envset
+module github.com/ggthedev/envset
 
 go 1.22
 

@@ -3,13 +3,13 @@ package targets
 import (
 	"bufio"
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/fsutil"
 )
 
 // LaunchdTarget manages macOS launchd environment variable settings.

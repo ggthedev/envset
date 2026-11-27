@@ -2,14 +2,14 @@ package audit
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/fsutil"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/logger"
 	"io"
 	"os"
 	"sort"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // FixOp is a single comment-out edit derived from a Finding.Fix.

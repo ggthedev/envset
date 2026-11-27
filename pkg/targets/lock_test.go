@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/fsutil"
 )
 
 // Concurrent writers must not overwrite each other's changes, including when

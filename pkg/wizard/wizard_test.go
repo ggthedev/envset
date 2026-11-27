@@ -3,7 +3,7 @@ package wizard
 import (
 	"testing"
 
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // Everything given on the command line is used as is: no question about it,

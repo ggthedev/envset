@@ -2,7 +2,7 @@
 
 package fsutil
 
-import "github.com/experimentalist/envset/pkg/logger"
+import "github.com/ggthedev/envset/pkg/logger"
 
 import "time"
 

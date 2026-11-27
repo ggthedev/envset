@@ -1,6 +1,6 @@
 package audit
 
-import "github.com/experimentalist/envset/pkg/logger"
+import "github.com/ggthedev/envset/pkg/logger"
 
 // Severity classifies the importance of a finding.
 type Severity string

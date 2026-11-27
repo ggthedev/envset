@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/experimentalist/envset/pkg/detector"
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/detector"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 func placerFor(home, shell string) *Placer {

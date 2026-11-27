@@ -34,7 +34,7 @@ and uses a throwaway home directory, so nothing on your machine changes.
 Requires Go 1.22 or newer (`brew install go`). Works on Apple Silicon and Intel Macs.
 
 ```bash
-git clone <your-remote>/envset.git && cd envset
+git clone https://github.com/ggthedev/envset.git && cd envset
 go install .                      # installs to $(go env GOPATH)/bin, usually ~/go/bin
 envset --help
 ```
@@ -72,8 +72,8 @@ A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <f
 Once the repo is pushed to GitHub you can install or upgrade on any Mac with:
 
 ```bash
-go install github.com/experimentalist/envset@latest
-# for a private repo, first:  go env -w GOPRIVATE=github.com/experimentalist/*
+go install github.com/ggthedev/envset@latest
+# for a private repo, first:  go env -w GOPRIVATE=github.com/ggthedev/*
 ```
 
 ## Quick reference

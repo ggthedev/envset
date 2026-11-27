@@ -1,7 +1,7 @@
 package audit
 
 import (
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"regexp"
 	"strings"
 )

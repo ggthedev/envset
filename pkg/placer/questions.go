@@ -2,8 +2,8 @@ package placer
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
-	"github.com/experimentalist/envset/pkg/term"
+	"github.com/ggthedev/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/term"
 	"os"
 	"strings"
 

@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/fsutil"
 )
 
 // Dir returns the directory that holds rules files: ~/.config/envset/.

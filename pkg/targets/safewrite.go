@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/logger"
 )
 
 // textFile is a line-preserving view of a file: joining lines back reproduces

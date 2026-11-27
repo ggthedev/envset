@@ -2,12 +2,12 @@ package ops
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/fsutil"
 )
 
 // PrintReloadHint prints a human-friendly hint to stderr after a write,

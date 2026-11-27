@@ -8,17 +8,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/experimentalist/envset/pkg/audit"
-	"github.com/experimentalist/envset/pkg/detector"
-	"github.com/experimentalist/envset/pkg/fsutil"
-	"github.com/experimentalist/envset/pkg/lazy"
-	"github.com/experimentalist/envset/pkg/logger"
-	"github.com/experimentalist/envset/pkg/placer"
-	"github.com/experimentalist/envset/pkg/rules"
-	"github.com/experimentalist/envset/pkg/targets"
-	"github.com/experimentalist/envset/pkg/term"
-	"github.com/experimentalist/envset/pkg/version"
-	"github.com/experimentalist/envset/pkg/wizard"
+	"github.com/ggthedev/envset/pkg/audit"
+	"github.com/ggthedev/envset/pkg/detector"
+	"github.com/ggthedev/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/lazy"
+	"github.com/ggthedev/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/placer"
+	"github.com/ggthedev/envset/pkg/rules"
+	"github.com/ggthedev/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/term"
+	"github.com/ggthedev/envset/pkg/version"
+	"github.com/ggthedev/envset/pkg/wizard"
 )
 
 // Add adds an environment variable entry.

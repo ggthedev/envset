@@ -2,8 +2,8 @@ package targets
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/fsutil"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"strings"

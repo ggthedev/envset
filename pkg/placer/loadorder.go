@@ -2,15 +2,15 @@ package placer
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // Definition is a file's effective (last active) definition of a key.

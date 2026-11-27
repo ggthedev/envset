@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/experimentalist/envset/pkg/version"
+	"github.com/ggthedev/envset/pkg/version"
 )
 
 // Logger is the log writer. There is normally one global instance owned by the

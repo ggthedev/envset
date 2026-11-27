@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 )
 
 // QuoteMode controls how a value is encoded into a shell config line.

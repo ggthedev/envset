@@ -3,13 +3,13 @@ package audit
 import (
 	"bufio"
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"regexp"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/placer"
-	"github.com/experimentalist/envset/pkg/rules"
+	"github.com/ggthedev/envset/pkg/placer"
+	"github.com/ggthedev/envset/pkg/rules"
 )
 
 // Auditor runs a series of checks against a registry of config files.

@@ -1,6 +1,6 @@
 package rules
 
-import "github.com/experimentalist/envset/pkg/logger"
+import "github.com/ggthedev/envset/pkg/logger"
 
 // Check IDs — keep in sync with the emitters in pkg/audit/audit.go.
 const (

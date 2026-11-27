@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/paths"
+	"github.com/ggthedev/envset/pkg/paths"
 )
 
 // Environment variables / .env keys recognised by the logger.

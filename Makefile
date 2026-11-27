@@ -3,7 +3,7 @@
 .DEFAULT_GOAL := help
 
 OUT    := output
-PKG    := github.com/experimentalist/envset
+PKG    := github.com/ggthedev/envset
 REV    := $(shell git rev-parse --short HEAD 2>/dev/null)
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 DIRTY  := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo +modified)

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/experimentalist/envset/pkg/logger"
-	"github.com/experimentalist/envset/pkg/paths"
+	"github.com/ggthedev/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/paths"
 )
 
 // ConfigDir returns envset's config directory:

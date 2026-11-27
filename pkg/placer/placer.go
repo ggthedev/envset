@@ -2,10 +2,10 @@ package placer
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 
-	"github.com/experimentalist/envset/pkg/detector"
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/detector"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // Placement is a ranked suggestion for where to write an entry.

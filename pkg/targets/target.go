@@ -2,7 +2,7 @@ package targets
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"path/filepath"
 	"regexp"
 	"strings"

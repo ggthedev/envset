@@ -3,7 +3,7 @@
 package term
 
 import (
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 
 	"github.com/AlecAivazis/survey/v2"

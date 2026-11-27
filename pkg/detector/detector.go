@@ -3,7 +3,7 @@ package detector
 import (
 	"context"
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"os/exec"
 	"os/user"

@@ -1,10 +1,10 @@
 package placer
 
 import (
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // Scope defines when the variable should be active.

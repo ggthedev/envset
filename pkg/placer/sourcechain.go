@@ -2,7 +2,7 @@ package placer
 
 import (
 	"bufio"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"regexp"
 	"strings"

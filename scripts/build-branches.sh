@@ -31,7 +31,7 @@ for b in "${branches[@]}"; do
   mkdir -p "$src"
   git -C "$root" archive "$b" | tar -x -C "$src"
   rev=$(git -C "$root" rev-parse --short "$b")
-  flags="-X github.com/experimentalist/envset/pkg/version.Version=$b@$rev"
+  flags="-X github.com/ggthedev/envset/pkg/version.Version=$b@$rev"
   for p in "${platforms[@]}"; do
     file="$name"
     [ -n "${MACS:-}" ] && file="$name-${p//\//-}"

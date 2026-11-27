@@ -1,6 +1,6 @@
 package main
 
-import "github.com/experimentalist/envset/cmd"
+import "github.com/ggthedev/envset/cmd"
 
 func main() {
 	cmd.Execute()

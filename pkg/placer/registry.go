@@ -2,12 +2,12 @@ package placer
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"runtime"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/ggthedev/envset/pkg/fsutil"
 )
 
 // ConfigFile describes a known configuration file in the registry.

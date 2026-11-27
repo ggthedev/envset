@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/experimentalist/envset/pkg/placer"
-	"github.com/experimentalist/envset/pkg/rules"
+	"github.com/ggthedev/envset/pkg/placer"
+	"github.com/ggthedev/envset/pkg/rules"
 )
 
 // runAuditWithRules wires up a fake home and applies custom rules end-to-end.

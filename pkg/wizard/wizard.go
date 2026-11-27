@@ -2,15 +2,15 @@ package wizard
 
 import (
 	"fmt"
-	"github.com/experimentalist/envset/pkg/term"
+	"github.com/ggthedev/envset/pkg/term"
 	"os"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/experimentalist/envset/pkg/detector"
-	"github.com/experimentalist/envset/pkg/logger"
-	"github.com/experimentalist/envset/pkg/placer"
-	"github.com/experimentalist/envset/pkg/targets"
+	"github.com/ggthedev/envset/pkg/detector"
+	"github.com/ggthedev/envset/pkg/logger"
+	"github.com/ggthedev/envset/pkg/placer"
+	"github.com/ggthedev/envset/pkg/targets"
 )
 
 // Preset holds what the user already gave on the command line. The wizards
