@@ -1,0 +1,124 @@
+# Every pull request merged into main becomes a release: test, tag, build the
+# Intel and Apple Silicon binaries, and publish them with generated notes.
+#
+# The version is the newest v* tag with its patch number raised by one, or the
+# minor number if the pull request has the label "release:minor". The first
+# release is v0.1.0.
+name: release
+
+# A push, not a pull_request event: the token of a pull request from a fork
+# cannot publish. Pushes that no merged pull request produced are skipped.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Find the merged pull request
+        id: pr
+        run: |
+          labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '
+            [.[] | select(.merged_at != null and .base.ref == "main")]
+            | if length == 0 then "none" else "merged " + ([.[0].labels[].name] | join(" ")) end')
+          if [ "$labels" = none ]; then
+            echo "No merged pull request for this push: nothing to release."
+            exit 0
+          fi
+          echo "merged=true" >>"$GITHUB_OUTPUT"
+          if [[ " $labels " == *" release:minor "* ]]; then
+            echo "bump=minor" >>"$GITHUB_OUTPUT"
+          else
+            echo "bump=patch" >>"$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.pr.outputs.merged == 'true'
+        with:
+          fetch-depth: 0 # all tags, to find the newest version
+
+      - uses: actions/setup-go@v7
+        if: steps.pr.outputs.merged == 'true'
+        with:
+          go-version: stable
+
+      - name: Test
+        if: steps.pr.outputs.merged == 'true'
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      - name: Tag the next version
+        if: steps.pr.outputs.merged == 'true'
+        id: version
+        env:
+          BUMP: ${{ steps.pr.outputs.bump }}
+        run: |
+          releases() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; }
+          # A re-run of this job keeps the tag it already gave this commit.
+          version=$(git tag --points-at HEAD --sort=-v:refname | releases | sed -n 1p)
+          if [ -z "$version" ]; then
+            latest=$(git tag --sort=-v:refname | releases | sed -n 1p)
+            if [ -z "$latest" ]; then
+              version=v0.1.0
+            else
+              IFS=. read -r major minor patch <<<"${latest#v}"
+              if [ "$BUMP" = minor ]; then
+                version="v$major.$((minor + 1)).0"
+              else
+                version="v$major.$minor.$((patch + 1))"
+              fi
+            fi
+            # Local only, so the build is stamped; publishing creates it on GitHub.
+            git tag "$version"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      - name: Build
+        if: steps.pr.outputs.merged == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          make build MACS=1
+          # The runner is Apple Silicon: check that binary runs and is stamped.
+          built=$(output/envset-darwin-arm64 version)
+          echo "$built"
+          [[ $built == "envset $VERSION ("* ]]
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            staging=$(mktemp -d)
+            cp "output/envset-darwin-$arch" "$staging/envset"
+            cp LICENSE README.md "$staging/"
+            tar -czf "dist/envset_${VERSION}_darwin_${arch}.tar.gz" -C "$staging" envset LICENSE README.md
+          done
+          (cd dist && shasum -a 256 *.tar.gz >checksums.txt)
+
+      - name: Publish the release
+        if: steps.pr.outputs.merged == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "$VERSION is already published."
+            exit 0
+          fi
+          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes

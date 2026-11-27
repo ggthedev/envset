@@ -82,6 +82,18 @@ go install github.com/ggthedev/envset@latest
 # for a private repo, first:  go env -w GOPRIVATE=github.com/ggthedev/*
 ```
 
+Every pull request merged into `main` publishes a
+[release](https://github.com/ggthedev/envset/releases) with binaries for Intel
+(`darwin_amd64`) and Apple Silicon (`darwin_arm64`), checksums and notes. The
+patch number goes up each time; label the pull request `release:minor` to raise
+the minor number instead. To install a downloaded one:
+
+```bash
+shasum -a 256 --check --ignore-missing checksums.txt
+tar -xzf envset_*_darwin_*.tar.gz envset
+mv envset ~/.local/bin/
+```
+
 ## Quick reference
 
 ```bash
