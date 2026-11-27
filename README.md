@@ -413,4 +413,6 @@ envset/
 
 ## License
 
-BSD-3-Clause. See [LICENSE](LICENSE).
+Copyright 2026 Gaurav Gupta. Licensed under the Apache License, Version 2.0: see
+[LICENSE](LICENSE). You may use, change and share this code; keep the copyright
+and [NOTICE](NOTICE) text, and mark the files you change.
