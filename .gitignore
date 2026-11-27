@@ -1,9 +1,20 @@
-# Build outputs (built with `go build -o envset .`)
+# Build outputs: `make build`, scripts/build-branches.sh and releases
 /envset
 /envset_test
 /dist/
-# per-branch binaries: output/envset-<branch>
 /output/
+
+# Private to this copy: notes, local to-dos and a status file
+/docs/local/
+/NOTES.md
+/project-status.md
+
+# Local tool settings, secrets and logs
+.claude/settings*.json
+*.local.json
+.windsurf/
+.env*
+*.log
 
 # OS / editor noise
 .DS_Store
