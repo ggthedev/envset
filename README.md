@@ -45,7 +45,18 @@ Make sure `~/go/bin` is on your `PATH`, which envset can do for you:
 ~/go/bin/envset add --type path_append --value '~/go/bin' --target zshenv
 ```
 
-To keep builds from several branches side by side, or to build for another Mac:
+From a checkout, `make` builds the code as it is on disk, uncommitted changes
+included (run `make` on its own to list the targets):
+
+```bash
+make build            # output/envset
+make build MACS=1     # output/envset-darwin-amd64 and -arm64, for another Mac
+make clear            # delete the binaries in output/
+```
+
+A link to `output/envset` is broken after `make clear` until the next build.
+
+To build committed branches instead, side by side, whatever is checked out:
 
 ```bash
 scripts/build-branches.sh develop                 # output/envset-dev
@@ -53,6 +64,8 @@ MACS=1 scripts/build-branches.sh develop          # Intel and Apple Silicon bina
 INSTALL=1 scripts/build-branches.sh develop       # also refresh output/envset
 envset version                                    # shows branch@commit and platform
 ```
+
+`make build` adds `+modified` to the version when there were uncommitted changes.
 
 A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <file>` clears that.
 
@@ -336,6 +349,7 @@ envset/
 │   ├── version/      which build is running
 │   └── ops/          orchestration behind each command
 ├── scripts/          commit gate and per-branch builds
+├── Makefile          make help | build | clear
 └── docs/TUTORIAL.md
 ```
 

@@ -8,7 +8,7 @@ import (
 	"runtime/debug"
 )
 
-// Version is set at build time by scripts/build-branches.sh with
+// Version is set at build time by the Makefile and scripts/build-branches.sh with
 // -ldflags "-X github.com/experimentalist/envset/pkg/version.Version=<branch>@<commit>".
 var Version = ""
 

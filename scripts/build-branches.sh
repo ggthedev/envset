@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build envset binaries into output/. Each build comes from a branch's committed
 # tree (git archive), so the working tree and checkout are never touched.
+# To build the checked-out code, uncommitted changes included, use `make build`.
 #   scripts/build-branches.sh                    # every local branch, this machine
 #   scripts/build-branches.sh develop qa-fixes   # only the named branches
 #   MACS=1 scripts/build-branches.sh develop     # Intel and Apple Silicon builds
@@ -34,7 +35,7 @@ for b in "${branches[@]}"; do
   for p in "${platforms[@]}"; do
     file="$name"
     [ -n "${MACS:-}" ] && file="$name-${p//\//-}"
-    if (cd "$src" && GOOS="${p%/*}" GOARCH="${p#*/}" CGO_ENABLED=0 go build -ldflags "$flags" -o "$out/$file" .); then
+    if (cd "$src" && GOOS="${p%/*}" GOARCH="${p#*/}" CGO_ENABLED=0 go build -trimpath -ldflags "$flags" -o "$out/$file" .); then
       printf '%-36s %s  (%s)\n' "output/$file" "$rev" "$b"
     else
       echo "FAILED: $b $p ($rev)" >&2
@@ -42,7 +43,7 @@ for b in "${branches[@]}"; do
     fi
   done
   if [ -n "${INSTALL:-}" ]; then
-    (cd "$src" && go build -ldflags "$flags" -o "$out/envset" .)
+    (cd "$src" && CGO_ENABLED=0 go build -trimpath -ldflags "$flags" -o "$out/envset" .)
     printf '%-36s %s  (%s)\n' "output/envset" "$rev" "$b"
   fi
 done
