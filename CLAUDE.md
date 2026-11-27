@@ -22,4 +22,4 @@ The full protocol is in `.claude/agents/comlog.md`. The gate script is `scripts/
 
 When a message is a question about the project (not a request to change it), or contains **NOTES**,
 delegate to the `notes` subagent. Pass it the question and the context it needs from the conversation,
-or the answer already given so it can be recorded. `NOTES.md` is local: never commit it.
+or the answer already given so it can be recorded. `docs/local/NOTES.md` is local: never commit it.

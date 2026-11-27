@@ -19,4 +19,4 @@ The rules are in `.claude/agents/comlog.md`, the single source of truth.
 
 For a question about the project (not a change request), or when a message contains **NOTES**:
 follow `.claude/agents/notes.md`. Answer from the code, then append the question and answer to
-`NOTES.md` at the repository root. That file is local: never commit it.
+`docs/local/NOTES.md`. That file is local: never commit it.
