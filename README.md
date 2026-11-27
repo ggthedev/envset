@@ -389,9 +389,9 @@ envset/
 │   ├── term/         TTY detection; prompts on stderr
 │   ├── version/      which build is running
 │   └── ops/          orchestration behind each command
-├── scripts/          commit gate and per-branch builds
+├── scripts/          commit gate, per-branch builds, licence notices
 ├── Makefile          make help | build | clear
-└── docs/TUTORIAL.md
+└── docs/             tutorial and deferred work
 ```
 
 ## Limitations
@@ -402,7 +402,7 @@ envset/
   seems to have no effect.
 - Locking coordinates envset runs only; an editor saving at the same instant is
   narrowed by a re-check, not prevented.
-- `--target launchd` keeps only one added `PATH` entry (see [TODO.md](TODO.md)).
+- `--target launchd` keeps only one added `PATH` entry (see [docs/TODO.md](docs/TODO.md)).
 
 ## Not yet supported
 
