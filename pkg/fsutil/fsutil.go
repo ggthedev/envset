@@ -10,19 +10,14 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/experimentalist/envset/pkg/paths"
 )
 
 // ConfigDir returns envset's config directory:
 // $XDG_CONFIG_HOME/envset if set, otherwise ~/.config/envset.
 func ConfigDir() (string, error) {
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "envset"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine home directory: %w", err)
-	}
-	return filepath.Join(home, ".config", "envset"), nil
+	return paths.ConfigDir()
 }
 
 // ConfigDirFor is ConfigDir for an explicit home directory (used where the

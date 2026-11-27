@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/experimentalist/envset/pkg/paths"
 )
 
 // Environment variables / .env keys recognised by the logger.
@@ -45,7 +45,7 @@ func ResolveLogPath() string {
 
 	// Without a config directory (no $HOME) there is nowhere to log: a
 	// relative path would write into whatever directory envset runs in.
-	cfg, err := fsutil.ConfigDir()
+	cfg, err := paths.ConfigDir()
 	if err != nil {
 		return ""
 	}

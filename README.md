@@ -344,6 +344,7 @@ envset/
 │   ├── rules/        built-in and user-acknowledged audit rules (~/.config/envset/*.json)
 │   ├── lazy/         lazy-load wrapper generator
 │   ├── logger/       run log
+│   ├── paths/        where envset's own files live
 │   ├── wizard/       interactive prompts
 │   ├── term/         TTY detection; prompts on stderr
 │   ├── version/      which build is running
