@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"github.com/experimentalist/envset/pkg/logger"
 	"regexp"
 	"strings"
 )
@@ -36,6 +37,7 @@ var (
 // NewBlockContext analyzes lines (0-indexed) and returns a context that can
 // answer "what blocks enclose line N?" in O(1) per query.
 func NewBlockContext(lines []string) *BlockContext {
+	defer logger.Enter()()
 	ctx := &BlockContext{
 		caseDepth: make([]int, len(lines)),
 		ifPreds:   make([][]string, len(lines)),
@@ -87,6 +89,7 @@ func NewBlockContext(lines []string) *BlockContext {
 
 // InCase reports whether the 1-based line number is inside any case ... esac.
 func (b *BlockContext) InCase(line int) bool {
+	defer logger.Enter()()
 	idx := line - 1
 	if idx < 0 || idx >= len(b.caseDepth) {
 		return false
@@ -103,6 +106,7 @@ func (b *BlockContext) InCase(line int) bool {
 //	fi
 //	source $cache           # this is the per-shell cost
 func (b *BlockContext) InCachePrimeGuard(line int) bool {
+	defer logger.Enter()()
 	idx := line - 1
 	if idx < 0 || idx >= len(b.ifPreds) {
 		return false

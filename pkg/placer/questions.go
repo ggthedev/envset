@@ -2,6 +2,7 @@ package placer
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/term"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 // AskScope prompts the user to clarify the intended scope.
 func AskScope() (Scope, error) {
+	defer logger.Enter()()
 	var choice string
 	prompt := &survey.Select{
 		Message: "When should this variable be active?",
@@ -42,6 +44,7 @@ func AskScope() (Scope, error) {
 
 // AskSystemOrUser prompts whether this is a system-level or personal setting.
 func AskSystemOrUser() (bool, error) {
+	defer logger.Enter()()
 	var isSystem bool
 	prompt := &survey.Confirm{
 		Message: "Is this a system-level setting (affects tools, scripts, background processes)?",
@@ -59,6 +62,7 @@ func AskSystemOrUser() (bool, error) {
 // locations and scope-mismatch warnings inline so the user has full context
 // before answering yes/no.
 func AskPlacementConfirmation(pl Placement, reg *Registry) (bool, string, error) {
+	defer logger.Enter()()
 	var confirm bool
 	fmt.Fprintf(os.Stderr, "\nSuggested file: %s (%s)\n", pl.File.Name, pl.File.Path)
 	fmt.Fprintf(os.Stderr, "Reason: %s (confidence: %.0f%%)\n", pl.Reason, pl.Confidence*100)
@@ -108,6 +112,7 @@ func AskPlacementConfirmation(pl Placement, reg *Registry) (bool, string, error)
 // target name. A user-cancellation results in (name="", err!=nil) so callers
 // can abort the operation cleanly.
 func AskScopeMismatchResolution(broken Placement, primary ConfigFile, intentScope Scope) (string, error) {
+	defer logger.Enter()()
 	optBroken := fmt.Sprintf("Add to %s anyway (only reaches %s shells until source-chain is fixed)",
 		broken.File.Name, broken.EffectiveScope)
 	optPrimary := fmt.Sprintf("Add to %s instead (correct %s scope)",
@@ -145,6 +150,7 @@ func AskScopeMismatchResolution(broken Placement, primary ConfigFile, intentScop
 //
 // Returns (nil, false) if no matching primary exists in the registry.
 func PrimaryFileForScope(reg *Registry, scope Scope) (*ConfigFile, bool) {
+	defer logger.Enter()()
 	for i := range reg.Files {
 		f := &reg.Files[i]
 		if f.Custom || f.Scope != scope {
@@ -169,6 +175,7 @@ func PrimaryFileForScope(reg *Registry, scope Scope) (*ConfigFile, bool) {
 
 // AskTargetPick lets the user pick any registered file.
 func AskTargetPick(registry *Registry) (string, error) {
+	defer logger.Enter()()
 	var names []string
 	for _, f := range registry.Files {
 		status := "missing"
@@ -197,6 +204,7 @@ func AskTargetPick(registry *Registry) (string, error) {
 
 // AskUserIntent runs a full clarifying questionnaire when confidence is low.
 func AskUserIntent(intent Intent) (Intent, error) {
+	defer logger.Enter()()
 	// If scope is still unknown, ask
 	if intent.Scope == ScopeUnknown {
 		scope, err := AskScope()
@@ -227,11 +235,13 @@ func AskUserIntent(intent Intent) (Intent, error) {
 // withChosenScope records the user's own answer to "when should this be
 // active?". Asking "system or personal?" afterwards would overwrite it.
 func (i Intent) withChosenScope(scope Scope) Intent {
+	defer logger.Enter()()
 	i.Scope = scope
 	i.ScopeChosen = scope != ScopeUnknown
 	return i
 }
 
 func containsStr(s, substr string) bool {
+	defer logger.Enter()()
 	return strings.Contains(s, substr)
 }

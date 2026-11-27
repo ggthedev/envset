@@ -11,18 +11,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/experimentalist/envset/pkg/logger"
 	"github.com/experimentalist/envset/pkg/paths"
 )
 
 // ConfigDir returns envset's config directory:
 // $XDG_CONFIG_HOME/envset if set, otherwise ~/.config/envset.
 func ConfigDir() (string, error) {
+	defer logger.Enter()()
 	return paths.ConfigDir()
 }
 
 // ConfigDirFor is ConfigDir for an explicit home directory (used where the
 // caller already resolved $HOME, e.g. targets built for a test HOME).
 func ConfigDirFor(home string) string {
+	defer logger.Enter()()
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
 		return filepath.Join(x, "envset")
 	}
@@ -34,6 +37,7 @@ func ConfigDirFor(home string) string {
 // A path that does not exist yet is returned unchanged; a dangling symlink
 // resolves to its (not yet existing) target.
 func ResolvePath(path string) (string, error) {
+	defer logger.Enter()()
 	fi, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return path, nil
@@ -62,6 +66,7 @@ func ResolvePath(path string) (string, error) {
 // those in parent directories (on macOS /var is itself a link). The file need
 // not exist yet.
 func canonicalPath(path string) (string, error) {
+	defer logger.Enter()()
 	real, err := ResolvePath(path)
 	if err != nil {
 		return "", err
@@ -81,6 +86,7 @@ func canonicalPath(path string) (string, error) {
 // LockAll locks several files in a fixed order, once per real file, so two
 // callers cannot deadlock. See Lock.
 func LockAll(paths []string) (unlock func(), err error) {
+	defer logger.Enter()()
 	byReal := map[string]string{}
 	for _, p := range paths {
 		real, err := canonicalPath(p)
@@ -114,6 +120,7 @@ func LockAll(paths []string) (unlock func(), err error) {
 // CheckWritable refuses a file whose owner write bit is off. Replacing a file
 // by rename would otherwise ignore "chmod a-w". A missing file is writable.
 func CheckWritable(path string) error {
+	defer logger.Enter()()
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil // missing or unreadable: the write itself will report it
@@ -130,6 +137,7 @@ func CheckWritable(path string) error {
 // followed (the link is preserved) and the existing file mode is kept;
 // newMode applies only when the file does not exist yet.
 func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
+	defer logger.Enter()()
 	real, err := ResolvePath(path)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", path, err)
@@ -170,6 +178,7 @@ func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", tmpName, err)
 	}
+	logger.Debug("atomic write: renaming %s over %s (%d bytes, mode %04o)", tmpName, real, len(data), mode)
 	if err := os.Rename(tmpName, real); err != nil {
 		return fmt.Errorf("replacing %s: %w", real, err)
 	}
@@ -180,12 +189,14 @@ func WriteFileAtomic(path string, data []byte, newMode os.FileMode) error {
 // removeStaleTemps deletes temp files that a killed run left behind. Only old
 // ones: a recent file may belong to a write that is still in progress.
 func removeStaleTemps(dir, prefix string) {
+	defer logger.Enter()()
 	matches, err := filepath.Glob(filepath.Join(globEscape(dir), globEscape(prefix)+"*"))
 	if err != nil {
 		return
 	}
 	for _, m := range matches {
 		if fi, err := os.Lstat(m); err == nil && fi.Mode().IsRegular() && time.Since(fi.ModTime()) > time.Hour {
+			logger.Debug("removing stale temp file %s", m)
 			os.Remove(m)
 		}
 	}
@@ -204,6 +215,7 @@ const (
 // BackupDir is where backups are stored: $ENVSET_BACKUP_DIR if set,
 // otherwise <ConfigDir>/backups.
 func BackupDir() (string, error) {
+	defer logger.Enter()()
 	if d := os.Getenv("ENVSET_BACKUP_DIR"); d != "" {
 		return d, nil
 	}
@@ -217,6 +229,7 @@ func BackupDir() (string, error) {
 // backupKey turns a path into a flat file-name prefix: files under $HOME
 // become "home__<rel>" (e.g. home__.zshrc), others the full path.
 func backupKey(path string) (string, error) {
+	defer logger.Enter()()
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -231,6 +244,7 @@ func backupKey(path string) (string, error) {
 
 // Tilde shortens a path under $HOME to ~/... for display.
 func Tilde(path string) string {
+	defer logger.Enter()()
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return path
@@ -247,10 +261,12 @@ func Tilde(path string) string {
 // Backup copies path byte-for-byte into the backup directory (mode 0600) and
 // returns the backup's path. A missing file is not an error: it returns "".
 func Backup(path string) (string, error) {
+	defer logger.Enter()()
 	return backup(path, "")
 }
 
 func backup(path, suffix string) (string, error) {
+	defer logger.Enter()()
 	real, err := ResolvePath(path)
 	if err != nil {
 		return "", err
@@ -277,6 +293,7 @@ func backup(path, suffix string) (string, error) {
 	if err := os.WriteFile(dest, data, 0o600); err != nil {
 		return "", fmt.Errorf("writing backup %s: %w", dest, err)
 	}
+	logger.Info("backup saved: %s (of %s)", dest, real)
 	pruneBackups(dir, key)
 	return dest, nil
 }
@@ -290,6 +307,7 @@ type BackupInfo struct {
 
 // ListBackups returns backups of path, newest first.
 func ListBackups(path string) ([]BackupInfo, error) {
+	defer logger.Enter()()
 	dir, err := BackupDir()
 	if err != nil {
 		return nil, err
@@ -302,6 +320,7 @@ func ListBackups(path string) ([]BackupInfo, error) {
 }
 
 func listBackups(dir, key string) ([]BackupInfo, error) {
+	defer logger.Enter()()
 	matches, err := filepath.Glob(filepath.Join(dir, globEscape(key)+".*"))
 	if err != nil {
 		return nil, err
@@ -322,11 +341,13 @@ func listBackups(dir, key string) ([]BackupInfo, error) {
 }
 
 func pruneBackups(dir, key string) {
+	defer logger.Enter()()
 	all, err := listBackups(dir, key)
 	if err != nil {
 		return
 	}
 	for i := MaxBackupsPerFile; i < len(all); i++ {
+		logger.Debug("pruning old backup %s", all[i].Path)
 		os.Remove(all[i].Path)
 	}
 }
@@ -336,6 +357,7 @@ func pruneBackups(dir, key string) {
 // are first saved as a ".pre-restore" backup so a restore can be undone.
 // Returns the backup that was restored.
 func Restore(path, backupPath string) (string, error) {
+	defer logger.Enter()()
 	if backupPath == "" {
 		list, err := ListBackups(path)
 		if err != nil {
@@ -370,6 +392,7 @@ func Restore(path, backupPath string) (string, error) {
 }
 
 func globEscape(s string) string {
+	defer logger.Enter()()
 	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`)
 	return r.Replace(s)
 }

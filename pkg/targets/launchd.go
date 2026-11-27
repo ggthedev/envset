@@ -3,6 +3,7 @@ package targets
 import (
 	"bufio"
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ type LaunchdTarget struct {
 
 // NewLaunchdTarget creates a new LaunchdTarget.
 func NewLaunchdTarget(home string) (*LaunchdTarget, error) {
+	defer logger.Enter()()
 	path := filepath.Join(fsutil.ConfigDirFor(home), "launchd.sh")
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.envset.environment.plist")
 	return &LaunchdTarget{
@@ -34,9 +36,16 @@ func NewLaunchdTarget(home string) (*LaunchdTarget, error) {
 	}, nil
 }
 
-func (l *LaunchdTarget) Name() string { return l.name }
-func (l *LaunchdTarget) Path() string { return l.path }
+func (l *LaunchdTarget) Name() string {
+	defer logger.Enter()()
+	return l.name
+}
+func (l *LaunchdTarget) Path() string {
+	defer logger.Enter()()
+	return l.path
+}
 func (l *LaunchdTarget) Exists() bool {
+	defer logger.Enter()()
 	_, err := os.Stat(l.path)
 	return err == nil
 }
@@ -47,8 +56,19 @@ var runLaunchctl = func(args ...string) error {
 	return exec.Command("launchctl", args...).Run()
 }
 
+// launchctl runs a subcommand on key and logs it, without the value. A failure
+// does not fail the command: launchd.sh applies the change at next login.
+func launchctl(sub, key string, value ...string) {
+	defer logger.Enter()()
+	logger.Debug("launchctl %s %s", sub, key)
+	if err := runLaunchctl(append([]string{sub, key}, value...)...); err != nil {
+		logger.Warn("launchctl %s %s failed: %v", sub, key, err)
+	}
+}
+
 // Preview returns the command string that would be written to launchd.sh.
 func (l *LaunchdTarget) Preview(key string, value string, varType VarType, quote QuoteMode) (string, error) {
+	defer logger.Enter()()
 	switch varType {
 	case VarTypePathAppend, VarTypePathPrepend:
 		v, err := encodePosixPathElem(value, quote)
@@ -74,11 +94,13 @@ func (l *LaunchdTarget) Preview(key string, value string, varType VarType, quote
 }
 
 func launchdPrefixes(key string) (active, commented string) {
+	defer logger.Enter()()
 	return fmt.Sprintf("launchctl setenv %s ", key), fmt.Sprintf("# envset: launchctl setenv %s ", key)
 }
 
 // Add appends or updates an environment variable in launchd.sh and active session.
 func (l *LaunchdTarget) Add(key string, value string, varType VarType, opts WriteOptions) (AddResult, error) {
+	defer logger.Enter()()
 	newLine, err := l.Preview(key, value, varType, opts.Quote)
 	if err != nil {
 		return AddResult{}, err
@@ -140,6 +162,7 @@ func (l *LaunchdTarget) Add(key string, value string, varType VarType, opts Writ
 
 // Remove comments out or deletes the variable from launchd.sh and active session.
 func (l *LaunchdTarget) Remove(key string, opts RemoveOptions) (RemoveResult, error) {
+	defer logger.Enter()()
 	if err := ValidateKey(key); err != nil {
 		return RemoveResult{}, err
 	}
@@ -202,13 +225,14 @@ func (l *LaunchdTarget) Remove(key string, opts RemoveOptions) (RemoveResult, er
 	// Unset in the live session too — but never PATH, which would leave GUI
 	// apps with no PATH at all until next login.
 	if key != "PATH" {
-		_ = runLaunchctl("unsetenv", key)
+		launchctl("unsetenv", key)
 	}
 	return res, nil
 }
 
 // List parses launchd.sh to list variables.
 func (l *LaunchdTarget) List(key string) ([]Entry, error) {
+	defer logger.Enter()()
 	if !l.Exists() {
 		return nil, nil
 	}
@@ -274,6 +298,7 @@ func (l *LaunchdTarget) List(key string) ([]Entry, error) {
 
 // ensurePlist writes the com.envset.environment.plist agent if missing.
 func (l *LaunchdTarget) ensurePlist() error {
+	defer logger.Enter()()
 	if _, err := os.Stat(l.plistPath); err == nil {
 		return nil // already exists
 	}
@@ -299,11 +324,13 @@ func (l *LaunchdTarget) ensurePlist() error {
 </plist>
 `, l.path)
 
+	logger.Info("writing launchd agent %s", l.plistPath)
 	return fsutil.WriteFileAtomic(l.plistPath, []byte(plistContent), 0o644)
 }
 
 // applyImmediately runs launchctl setenv to update the active session.
 func (l *LaunchdTarget) applyImmediately(key, value string, varType VarType) {
+	defer logger.Enter()()
 	var runVal string
 	switch varType {
 	case VarTypePathAppend:
@@ -322,11 +349,12 @@ func (l *LaunchdTarget) applyImmediately(key, value string, varType VarType) {
 		_ = os.Setenv("PATH", runVal)
 	}
 
-	_ = runLaunchctl("setenv", key, runVal)
+	launchctl("setenv", key, runVal)
 }
 
 // Helper functions (defined in shell.go, copy/pasted or reused)
 func readLines(path string) ([]string, error) {
+	defer logger.Enter()()
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

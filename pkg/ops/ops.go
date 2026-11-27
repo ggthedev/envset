@@ -28,9 +28,9 @@ import (
 // quote selects value encoding: targets.QuoteExpand (default), QuoteLiteral or QuoteRaw.
 // appendNew (--append) adds a new line instead of editing existing ones.
 func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dryRun, autoYes, printSource, appendNew bool) error {
-	logger.Step("ops.Add")
-	logger.Input("key=%q value=%q target=%q type=%q quote=%q dry_run=%v auto_yes=%v print_source=%v",
-		key, redact(key, value), targetName, varTypeStr, quote, dryRun, autoYes, printSource)
+	defer logger.Enter()()
+	logger.Debug("input: key=%q value=%q target=%q type=%q quote=%q dry_run=%v auto_yes=%v print_source=%v",
+		logger.SafeKey(key), logger.Hidden(value), targetName, varTypeStr, quote, dryRun, autoYes, printSource)
 
 	var varType targets.VarType
 	var err error
@@ -52,14 +52,14 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 		if autoYes || !term.Interactive() {
 			return fmt.Errorf("--key and --value are required when not running interactively (or with --yes)")
 		}
-		logger.Trace("add: missing required input — entering wizard")
+		logger.Debug("add: missing required input — entering wizard")
 		answers, err := wizard.RunAddWizard(wizard.Preset{Key: key, Value: value, Target: targetName, Type: varTypeStr, Quote: quote})
 		if err != nil {
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		key, value, targetName, varType = answers.Key, answers.Value, answers.Target, answers.VarType
 		if !answers.Confirmed {
-			logger.Result("add: aborted by user in wizard")
+			logger.Info("add: aborted by user in wizard")
 			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
@@ -74,23 +74,24 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 
 		// If no target specified, use placer to auto-suggest
 		if targetName == "" {
-			logger.Step("auto-placement")
+			logger.Debug("auto-placement")
 			info, detectErr := detector.Detect()
 			if detectErr != nil {
 				return fmt.Errorf("cannot detect environment for auto-placement: %w", detectErr)
 			}
 			p := placer.NewPlacer(info)
 			intent := placer.DetectIntent(key, value, varType)
-			logger.Trace("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
+			logger.Debug("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
 			placements := p.Analyze(intent)
 			if len(placements) == 0 {
-				return fmt.Errorf("cannot determine optimal config file for %s", key)
+				return logger.Private("cannot determine optimal config file for "+logger.SafeKey(key),
+					fmt.Errorf("cannot determine optimal config file for %s", key))
 			}
 			for i, pl := range placements {
-				logger.Trace("  candidate %d: %-22s confidence=%.0f%% reason=%q", i+1, pl.File.Name, pl.Confidence*100, pl.Reason)
+				logger.Debug("  candidate %d: %-22s confidence=%.0f%% reason=%q", i+1, pl.File.Name, pl.Confidence*100, pl.Reason)
 			}
 			top := placements[0]
-			logger.Decision("placed=%s path=%s confidence=%.0f%% update=%v scope_mismatch=%v dups=%d reason=%q",
+			logger.Info("placed=%s path=%s confidence=%.0f%% update=%v scope_mismatch=%v dups=%d reason=%q",
 				top.File.Name, top.File.Path, top.Confidence*100, top.Update,
 				top.ScopeMismatch, len(top.DuplicateLocations), top.Reason)
 			fmt.Fprintf(infoOut, "Auto-placed: %s (%s)\n", top.File.Name, top.File.Path)
@@ -112,13 +113,13 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 				fmt.Fprintf(os.Stderr,
 					"WARNING: %s effective scope is %s (declared %s). Variables may not reach %s shells. Run `envset audit` for details.\n",
 					top.File.Name, top.EffectiveScope, top.File.Scope, intent.Scope)
-				logger.Trace("ops.Add: scope mismatch on top placement; warned on stderr")
+				logger.Warn("scope mismatch: %s effective=%s declared=%s", top.File.Name, top.EffectiveScope, intent.Scope)
 			}
 			targetName = top.File.Name
 
 			if !autoYes {
 				warnDuplicates(targetName, key)
-				logger.Result("auto-placement awaiting --yes confirmation; aborted")
+				logger.Info("auto-placement awaiting --yes confirmation; aborted")
 				fmt.Fprintln(infoOut, "Use --yes to skip this confirmation.")
 				return fmt.Errorf("auto-placement requires --yes to confirm")
 			}
@@ -140,7 +141,6 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 
 	warnDuplicates(targetName, key)
 
-	logger.Step("write")
 	res, err := t.Add(key, value, varType, targets.WriteOptions{DryRun: dryRun, Quote: quote, Append: appendNew})
 	if err != nil {
 		return showRefused(key, err)
@@ -152,7 +152,7 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 	switch res.Outcome {
 	case targets.Unchanged:
 		fmt.Fprintf(infoOut, "No change: %s already contains:\n  %s\n", t.Path(), strings.Join(res.Lines, "\n  "))
-		logger.Result("add: unchanged — %s already present in %s", key, t.Path())
+		logger.Info("add: unchanged — %s already present in %s", logger.SafeKey(key), t.Path())
 		return nil
 	case targets.Updated:
 		fmt.Fprintf(infoOut, "%supdated %s line %d:\n  - %s\n  + %s\n", dry, t.Path(), res.LineNum,
@@ -161,11 +161,11 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 		fmt.Fprintf(infoOut, "%sadded to %s:\n  %s\n", dry, t.Path(), strings.Join(res.Lines, "\n  "))
 	}
 	if dryRun {
-		logger.Result("add: dry-run — would %s %s=%s in %s", res.Outcome, key, redact(key, value), t.Path())
+		logger.Info("add: dry-run — would have %s %s in %s", res.Outcome, logger.SafeKey(key), t.Path())
 		return nil
 	}
 	reportBackup(infoOut, res.Backup)
-	logger.Result("add: %s %s in %s", res.Outcome, key, t.Path())
+	logger.Info("add: %s %s in %s", res.Outcome, logger.SafeKey(key), t.Path())
 
 	// Post-write: emit source hint or eval-able source command
 	if printSource {
@@ -179,6 +179,7 @@ func Add(key, value, targetName, varTypeStr string, quote targets.QuoteMode, dry
 // showRefused prints the lines behind a refusal to the terminal. They are not
 // part of the error itself, which is logged. Secret values stay hidden.
 func showRefused(key string, err error) error {
+	defer logger.Enter()()
 	var refused *targets.RefusedError
 	if errors.As(err, &refused) {
 		for _, e := range refused.Entries {
@@ -196,6 +197,7 @@ func showRefused(key string, err error) error {
 // warnDuplicates tells the user, on stderr, when key is also defined in other
 // files and which of the values their shells will end up with.
 func warnDuplicates(targetName, key string) {
+	defer logger.Enter()()
 	info, err := detector.Detect()
 	if err != nil {
 		return
@@ -213,16 +215,17 @@ func warnDuplicates(targetName, key string) {
 
 // reportBackup tells the user where the pre-change copy went.
 func reportBackup(w *os.File, backup string) {
+	defer logger.Enter()()
 	if backup == "" {
 		return
 	}
 	fmt.Fprintf(w, "Backup saved: %s  (undo: envset restore --target <file>)\n", fsutil.Tilde(backup))
-	logger.Trace("backup saved: %s", backup)
 }
 
 // homeDir returns $HOME, failing loudly instead of silently writing relative
 // paths into the current directory when it cannot be determined.
 func homeDir() (string, error) {
+	defer logger.Enter()()
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return "", fmt.Errorf("cannot determine home directory (is $HOME set?): %v", err)
@@ -236,9 +239,9 @@ func homeDir() (string, error) {
 // (required for PATH so one entry can be removed without wiping the others).
 // commentSet says whether --comment was given, so the wizard need not ask.
 func Remove(key, value, targetName string, comment, dryRun, printSource, commentSet bool) error {
-	logger.Step("ops.Remove")
-	logger.Input("key=%q value=%q target=%q comment=%v dry_run=%v print_source=%v",
-		key, redact(key, value), targetName, comment, dryRun, printSource)
+	defer logger.Enter()()
+	logger.Debug("input: key=%q value=%q target=%q comment=%v dry_run=%v print_source=%v",
+		logger.SafeKey(key), logger.Hidden(value), targetName, comment, dryRun, printSource)
 
 	infoOut := os.Stdout
 	if printSource {
@@ -249,7 +252,7 @@ func Remove(key, value, targetName string, comment, dryRun, printSource, comment
 		if !term.Interactive() {
 			return fmt.Errorf("--key and --target are required when not running interactively")
 		}
-		logger.Trace("remove: missing input — entering wizard")
+		logger.Debug("remove: missing input — entering wizard")
 		var confirmed bool
 		var err error
 		key, targetName, comment, confirmed, err = wizard.RunRemoveWizard(wizard.Preset{Key: key, Target: targetName, Comment: comment, CommentSet: commentSet})
@@ -257,7 +260,7 @@ func Remove(key, value, targetName string, comment, dryRun, printSource, comment
 			return fmt.Errorf("wizard error: %w", err)
 		}
 		if !confirmed {
-			logger.Result("remove: aborted by user in wizard")
+			logger.Info("remove: aborted by user in wizard")
 			fmt.Fprintln(infoOut, "Aborted.")
 			return nil
 		}
@@ -272,14 +275,13 @@ func Remove(key, value, targetName string, comment, dryRun, printSource, comment
 		return err
 	}
 
-	logger.Step("write")
 	res, err := t.Remove(key, targets.RemoveOptions{Comment: comment, DryRun: dryRun, Value: value})
 	if err != nil {
 		return showRefused(key, err)
 	}
 	if len(res.Affected) == 0 {
 		fmt.Fprintf(infoOut, "No change: %s is already commented out in %s\n", key, t.Path())
-		logger.Result("remove: unchanged — %s already commented in %s", key, t.Path())
+		logger.Info("remove: unchanged — %s already commented in %s", key, t.Path())
 		return nil
 	}
 	action := "deleted"
@@ -295,11 +297,11 @@ func Remove(key, value, targetName string, comment, dryRun, printSource, comment
 		fmt.Fprintf(infoOut, "  line %d: %s\n", e.LineNum, strings.TrimSpace(e.RawLine))
 	}
 	if dryRun {
-		logger.Result("remove: dry-run — would have %s %s from %s", action, key, t.Path())
+		logger.Info("remove: dry-run — would have %s %s from %s", action, key, t.Path())
 		return nil
 	}
 	reportBackup(infoOut, res.Backup)
-	logger.Result("remove: %s %s in %s", action, key, t.Path())
+	logger.Info("remove: %s %s in %s", action, key, t.Path())
 
 	if printSource {
 		PrintSourceCommand(os.Stdout, t.Path())
@@ -311,14 +313,14 @@ func Remove(key, value, targetName string, comment, dryRun, printSource, comment
 
 // List lists entries in a target config.
 func List(key, targetName string) error {
-	logger.Step("ops.List")
-	logger.Input("key=%q target=%q", key, targetName)
+	defer logger.Enter()()
+	logger.Debug("input: key=%q target=%q", logger.SafeKey(key), targetName)
 
 	if targetName == "" {
 		if !term.Interactive() {
 			return fmt.Errorf("--target is required when not running interactively")
 		}
-		logger.Trace("list: target missing — entering wizard")
+		logger.Debug("list: target missing — entering wizard")
 		var err error
 		targetName, err = wizard.RunListWizard()
 		if err != nil {
@@ -339,7 +341,7 @@ func List(key, targetName string) error {
 	if err != nil {
 		return err
 	}
-	logger.Result("list: %d entries in %s", len(entries), t.Path())
+	logger.Info("list: %d entries in %s", len(entries), t.Path())
 
 	if len(entries) == 0 {
 		fmt.Printf("No entries found in %s\n", t.Path())
@@ -365,14 +367,14 @@ func List(key, targetName string) error {
 
 // Detect prints detected environment information.
 func Detect() error {
-	logger.Step("ops.Detect")
+	defer logger.Enter()()
 	info, err := detector.Detect()
 	if err != nil {
 		return err
 	}
-	logger.Trace("detector: os=%s shell=%s source=%q running=%s login_shell=%s",
+	logger.Debug("detector: os=%s shell=%s source=%q running=%s login_shell=%s",
 		info.OS, info.Shell, info.ShellSource, info.RunningShell, info.LoginShell)
-	logger.Result("detect: shell=%s running=%s configs=%d", info.Shell, info.RunningShell, len(info.ShellConfigs))
+	logger.Info("detect: shell=%s running=%s configs=%d", info.Shell, info.RunningShell, len(info.ShellConfigs))
 
 	running := info.RunningShell
 	if running == "" {
@@ -417,8 +419,8 @@ func Detect() error {
 // Returns a non-nil error iff any finding has severity "error" (after fixes are
 // applied in fix mode the report is re-evaluated).
 func Audit(fix, dryRun, yes bool) error {
-	logger.Step("ops.Audit")
-	logger.Input("fix=%v dry_run=%v yes=%v", fix, dryRun, yes)
+	defer logger.Enter()()
+	logger.Debug("input: fix=%v dry_run=%v yes=%v", fix, dryRun, yes)
 	info, err := detector.Detect()
 	if err != nil {
 		return err
@@ -437,18 +439,18 @@ func Audit(fix, dryRun, yes bool) error {
 	}
 	customBroken = loaded.CustomBroken
 	ideals, custom := loaded.Ideals, loaded.Custom
-	logger.Trace("rules loaded: ideals.checks=%d custom.rules=%d", len(ideals.Checks), len(custom.Rules))
+	logger.Debug("rules loaded: ideals.checks=%d custom.rules=%d", len(ideals.Checks), len(custom.Rules))
 
 	a := audit.New(p.Registry)
 	r := a.Run()
 	r.ApplyCustomRules(custom)
 
 	counts := r.CountBySeverity()
-	logger.Decision("audit: errors=%d warnings=%d info=%d acknowledged=%d",
+	logger.Info("audit: errors=%d warnings=%d info=%d acknowledged=%d",
 		counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo], countAcknowledged(r))
 	if logger.Verbose() {
 		for i, f := range r.Findings {
-			logger.Trace("  finding %d: [%s] %s @ %s:%d ack=%v", i+1, f.Severity, f.Title, f.File, f.Line, f.Acknowledged)
+			logger.Debug("  finding %d: [%s] %s @ %s:%d ack=%v", i+1, f.Severity, f.CheckID, f.File, f.Line, f.Acknowledged)
 		}
 	}
 	audit.PrintReport(os.Stdout, r)
@@ -462,7 +464,7 @@ func Audit(fix, dryRun, yes bool) error {
 		if len(fixOps) > 0 {
 			fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
 		}
-		logger.Result("audit --dry-run: %d op(s) previewed, nothing written", len(fixOps))
+		logger.Info("audit --dry-run: %d op(s) previewed, nothing written", len(fixOps))
 	} else if fix {
 		if !yes && !term.Interactive() {
 			return fmt.Errorf("audit --fix needs a terminal for its review; use --yes to apply all fixes non-interactively, or --dry-run to preview")
@@ -480,7 +482,7 @@ func Audit(fix, dryRun, yes bool) error {
 			r2 := audit.New(p.Registry).Run()
 			r2.ApplyCustomRules(custom)
 			counts = r2.CountBySeverity()
-			logger.Decision("audit post-fix: errors=%d warnings=%d info=%d",
+			logger.Info("audit post-fix: errors=%d warnings=%d info=%d",
 				counts[audit.SevError], counts[audit.SevWarn], counts[audit.SevInfo])
 		}
 	}
@@ -493,14 +495,15 @@ func Audit(fix, dryRun, yes bool) error {
 		}
 	}
 	if activeErrors > 0 {
-		logger.Result("audit: %d error-level issue(s) — exit non-zero", activeErrors)
+		logger.Info("audit: %d error-level issue(s) — exit non-zero", activeErrors)
 		return fmt.Errorf("audit found %d error-level issue(s)", activeErrors)
 	}
-	logger.Result("audit: no error-level issues")
+	logger.Info("audit: no error-level issues")
 	return nil
 }
 
 func countAcknowledged(r audit.Report) int {
+	defer logger.Enter()()
 	n := 0
 	for _, f := range r.Findings {
 		if f.Acknowledged {
@@ -525,12 +528,13 @@ func countAcknowledged(r audit.Report) int {
 // re-snapshotted from current ideals, and rules whose target file no longer
 // exists are pruned. This is the "training" loop the user described.
 func runAuditFix(r audit.Report, custom *rules.Custom, ideals rules.Ideals, dryRun, yes bool) (bool, error) {
+	defer logger.Enter()()
 	// Always refresh metadata, even if user makes no choices this run.
 	if rules.RefreshImpacts(custom, ideals) {
-		logger.Trace("custom rules: impact strings refreshed from ideals")
+		logger.Debug("custom rules: impact strings refreshed from ideals")
 	}
 	if pruned := rules.PruneStale(custom); pruned > 0 {
-		logger.Trace("custom rules: pruned %d stale rule(s)", pruned)
+		logger.Info("custom rules: pruned %d stale rule(s)", pruned)
 	}
 
 	if yes {
@@ -541,6 +545,7 @@ func runAuditFix(r audit.Report, custom *rules.Custom, ideals rules.Ideals, dryR
 
 // runAuditFixYes is the non-interactive path: apply all fixable findings, no overrides.
 func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, error) {
+	defer logger.Enter()()
 	ops, err := audit.BuildFixOps(r)
 	if err != nil {
 		return false, fmt.Errorf("building fix ops: %w", err)
@@ -549,7 +554,7 @@ func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, er
 
 	// Persist any rule-metadata refresh even when no fixes are applied.
 	if err := saveCustom(*custom); err != nil {
-		logger.Trace("save custom: %v", err)
+		logger.Warn("save custom: %v", err)
 	}
 
 	if len(ops) == 0 {
@@ -557,7 +562,7 @@ func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, er
 	}
 	if dryRun {
 		fmt.Fprintln(os.Stdout, "(dry-run: no files modified)")
-		logger.Result("audit --fix --dry-run: %d op(s) previewed, nothing written", len(ops))
+		logger.Info("audit --fix --dry-run: %d op(s) previewed, nothing written", len(ops))
 		return false, nil
 	}
 	backups, err := audit.ApplyFixes(ops)
@@ -570,6 +575,7 @@ func runAuditFixYes(r audit.Report, custom *rules.Custom, dryRun bool) (bool, er
 
 // runAuditFixInteractive walks each active finding and prompts.
 func runAuditFixInteractive(r audit.Report, custom *rules.Custom, ideals rules.Ideals, dryRun bool) (bool, error) {
+	defer logger.Enter()()
 	reader := bufio.NewReader(os.Stdin)
 	var toApply []audit.Finding
 	addedRules := 0
@@ -584,7 +590,7 @@ func runAuditFixInteractive(r audit.Report, custom *rules.Custom, ideals rules.I
 	if len(pending) == 0 {
 		fmt.Fprintln(os.Stdout, "Nothing to review.")
 		if err := saveCustom(*custom); err != nil {
-			logger.Trace("save custom: %v", err)
+			logger.Warn("save custom: %v", err)
 		}
 		return false, nil
 	}
@@ -663,6 +669,7 @@ reviewLoop:
 var customBroken bool
 
 func saveCustom(c rules.Custom) error {
+	defer logger.Enter()()
 	if customBroken {
 		return fmt.Errorf("not saving custom.json: the existing file is malformed; fix or delete it first")
 	}
@@ -672,6 +679,7 @@ func saveCustom(c rules.Custom) error {
 // promptChoice loops until a valid single-letter choice is given.
 // allowApply controls whether 'a' is accepted.
 func promptChoice(r *bufio.Reader, opts string, allowApply bool) string {
+	defer logger.Enter()()
 	for {
 		fmt.Fprintf(os.Stderr, "    choice %s: ", opts)
 		line, err := r.ReadString('\n')
@@ -694,6 +702,7 @@ func promptChoice(r *bufio.Reader, opts string, allowApply bool) string {
 // buildCustomRule prompts for the optional reason and constructs a CustomRule
 // from the finding. Subject is preferred; LineHash is recorded as fallback.
 func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rules.CustomRule {
+	defer logger.Enter()()
 	fmt.Fprint(os.Stderr, "    reason (optional, press Enter to skip): ")
 	reasonLine, _ := r.ReadString('\n')
 	reason := strings.TrimSpace(reasonLine)
@@ -718,23 +727,25 @@ func buildCustomRule(r *bufio.Reader, f audit.Finding, ideals rules.Ideals) rule
 }
 
 func reportApplied(ops []audit.FixOp, backups map[string]string) {
+	defer logger.Enter()()
 	seen := map[string]bool{}
 	for _, op := range ops {
 		if !seen[op.File] {
 			seen[op.File] = true
 			fmt.Fprintf(os.Stdout, "  fixed  %s  (backup: %s)\n", op.File, fsutil.Tilde(backups[op.File]))
+			logger.Info("audit --fix: fixed %s (backup: %s)", op.File, backups[op.File])
 		}
 	}
 	fmt.Fprintf(os.Stdout, "\nApplied %d fix(es). Run `envset audit` to verify.\n", len(ops))
-	logger.Result("audit --fix: applied %d op(s)", len(ops))
+	logger.Info("audit --fix: applied %d op(s)", len(ops))
 }
 
 // Reload prints `source <file>` lines suitable for `eval "$(envset reload ...)"`.
 // If targetName is empty, it emits the existing files the user's shell reads on
 // its own, in load order (files they source come along with them).
 func Reload(targetName string) error {
-	logger.Step("ops.Reload")
-	logger.Input("target=%q", targetName)
+	defer logger.Enter()()
+	logger.Debug("input: target=%q", targetName)
 
 	info, err := detector.Detect()
 	if err != nil {
@@ -762,7 +773,7 @@ func Reload(targetName string) error {
 			path = t.Path()
 		}
 		PrintSourceCommand(os.Stdout, path)
-		logger.Result("reload: emitted source %s", path)
+		logger.Info("reload: emitted source %s", path)
 		return nil
 	}
 
@@ -773,7 +784,7 @@ func Reload(targetName string) error {
 	if len(files) == 0 {
 		fmt.Fprintf(os.Stderr, "No %s startup files exist yet.\n", info.Shell)
 	}
-	logger.Result("reload: emitted %d source line(s)", len(files))
+	logger.Info("reload: emitted %d source line(s)", len(files))
 	return nil
 }
 
@@ -781,8 +792,9 @@ func Reload(targetName string) error {
 // If write is true, the wrapper is also appended to the appropriate interactive
 // config file (.zshrc or .bashrc).
 func Lazy(toolName, initCmd string, write bool) error {
-	logger.Step("ops.Lazy")
-	logger.Input("tool=%q init_cmd=%q write=%v", toolName, initCmd, write)
+	defer logger.Enter()()
+	// The tool name is checked by lazy.Resolve, so it is logged only after.
+	logger.Debug("input: init_cmd=%q write=%v", logger.Hidden(initCmd), write)
 
 	info, err := detector.Detect()
 	if err != nil {
@@ -794,11 +806,12 @@ func Lazy(toolName, initCmd string, write bool) error {
 		return err
 	}
 
+	logger.Debug("lazy: tool=%s shell=%s", spec.Name, spec.Shell)
 	snippet := lazy.Generate(spec)
 	fmt.Fprint(os.Stdout, snippet)
 
 	if !write {
-		logger.Result("lazy: printed snippet for %s (no write)", toolName)
+		logger.Info("lazy: printed snippet for %s (no write)", toolName)
 		return nil
 	}
 
@@ -830,7 +843,7 @@ func Lazy(toolName, initCmd string, write bool) error {
 	for _, ln := range strings.Split(string(existing), "\n") {
 		if strings.TrimSpace(ln) == header {
 			fmt.Fprintf(os.Stderr, "No change: a lazy wrapper for %s is already in %s\n", toolName, target.Path)
-			logger.Result("lazy: wrapper for %s already present in %s", toolName, target.Path)
+			logger.Info("lazy: wrapper for %s already present in %s", toolName, target.Path)
 			return nil
 		}
 	}
@@ -847,23 +860,14 @@ func Lazy(toolName, initCmd string, write bool) error {
 
 	fmt.Fprintf(os.Stderr, "Appended lazy wrapper to %s\n", target.Path)
 	reportBackup(os.Stderr, backup)
-	logger.Result("lazy: appended snippet for %s to %s", toolName, target.Path)
+	logger.Info("lazy: appended snippet for %s to %s", toolName, target.Path)
 	return nil
-}
-
-// redact replaces the value with [redacted] when the key looks like a secret.
-// Avoids leaking API tokens / passwords into the audit log.
-func redact(key, value string) string {
-	if detector.IsSecret(key) {
-		return "[redacted]"
-	}
-	return value
 }
 
 // Restore lists or restores the backups envset keeps for a config file.
 func Restore(targetName, backupPath string, list, dryRun bool) error {
-	logger.Step("ops.Restore")
-	logger.Input("target=%q backup=%q list=%v dry_run=%v", targetName, backupPath, list, dryRun)
+	defer logger.Enter()()
+	logger.Debug("input: target=%q backup=%q list=%v dry_run=%v", targetName, backupPath, list, dryRun)
 
 	home, err := homeDir()
 	if err != nil {
@@ -915,7 +919,7 @@ func Restore(targetName, backupPath string, list, dryRun bool) error {
 	}
 	fmt.Printf("Restored %s from %s\n", fsutil.Tilde(t.Path()), fsutil.Tilde(restored))
 	fmt.Println("The previous contents were saved first; see `envset restore --list`.")
-	logger.Result("restore: %s from %s", t.Path(), restored)
+	logger.Info("restore: %s from %s", t.Path(), restored)
 	PrintReloadHint(t.Path(), targetName)
 	return nil
 }

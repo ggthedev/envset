@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/experimentalist/envset/pkg/logger"
 )
 
 // textFile is a line-preserving view of a file: joining lines back reproduces
@@ -24,6 +25,7 @@ type textFile struct {
 }
 
 func readTextFile(path string) (textFile, error) {
+	defer logger.Enter()()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return textFile{}, nil
@@ -31,6 +33,7 @@ func readTextFile(path string) (textFile, error) {
 	if err != nil {
 		return textFile{}, fmt.Errorf("reading %s: %w", path, err)
 	}
+	logger.Debug("read %s (%d bytes)", path, len(data))
 	tf := textFile{raw: data, existed: true}
 	if len(data) == 0 {
 		return tf, nil
@@ -45,6 +48,7 @@ func readTextFile(path string) (textFile, error) {
 }
 
 func (tf *textFile) bytes() []byte {
+	defer logger.Enter()()
 	if len(tf.lines) == 0 {
 		return nil
 	}
@@ -58,6 +62,7 @@ func (tf *textFile) bytes() []byte {
 // appendLines adds lines at the end, ensuring the file ends with a newline
 // and using CRLF if the file does.
 func (tf *textFile) appendLines(add ...string) {
+	defer logger.Enter()()
 	if n := len(tf.lines); n > 0 && strings.HasSuffix(tf.lines[0], "\r") {
 		if !strings.HasSuffix(tf.lines[n-1], "\r") {
 			tf.lines[n-1] += "\r"
@@ -73,11 +78,13 @@ func (tf *textFile) appendLines(add ...string) {
 }
 
 func leadingWS(s string) string {
+	defer logger.Enter()()
 	return s[:len(s)-len(strings.TrimLeft(s, " \t"))]
 }
 
 // ShellForPath guesses which shell parses a config file, for syntax checks.
 func ShellForPath(path string) string {
+	defer logger.Enter()()
 	base := filepath.Base(path)
 	switch {
 	case strings.HasSuffix(base, ".fish"):
@@ -100,6 +107,7 @@ func ShellForPath(path string) string {
 // newMode applies only when the file is created. Returns the backup path
 // ("" when the file did not exist before).
 func CommitFile(path, shell string, oldData []byte, existed bool, newData []byte, newMode os.FileMode) (string, error) {
+	defer logger.Enter()()
 	if err := fsutil.CheckWritable(path); err != nil {
 		return "", err
 	}
@@ -125,6 +133,7 @@ func CommitFile(path, shell string, oldData []byte, existed bool, newData []byte
 	if err := unchangedSinceRead(path, oldData, existed); err != nil {
 		return "", err
 	}
+	logger.Debug("writing %s (%d -> %d bytes, existed=%v)", path, len(oldData), len(newData), existed)
 	if err := fsutil.WriteFileAtomic(path, newData, newMode); err != nil {
 		return "", err
 	}
@@ -134,6 +143,7 @@ func CommitFile(path, shell string, oldData []byte, existed bool, newData []byte
 // unchangedSinceRead checks, just before replacing path, that nothing else
 // (an editor, say, which takes no lock) changed it since envset read it.
 func unchangedSinceRead(path string, oldData []byte, existed bool) error {
+	defer logger.Enter()()
 	now, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -149,7 +159,9 @@ func unchangedSinceRead(path string, oldData []byte, existed bool) error {
 }
 
 func syntaxGuard(shell string, oldData []byte, existed bool, newData []byte) error {
+	defer logger.Enter()()
 	if os.Getenv("ENVSET_NO_SYNTAX_CHECK") == "1" {
+		logger.Warn("syntax check skipped: ENVSET_NO_SYNTAX_CHECK=1")
 		return nil
 	}
 	newErr, ok := parseCheck(shell, newData)
@@ -161,12 +173,15 @@ func syntaxGuard(shell string, oldData []byte, existed bool, newData []byte) err
 			return nil // file was already unparseable; don't block edits to it
 		}
 	}
-	return fmt.Errorf("refusing to write: the result would not parse in %s:\n%s", shell, newErr)
+	// The checker quotes lines of the file, so its output stays out of the log.
+	return logger.Private("refusing to write: the result would not parse in "+shell,
+		fmt.Errorf("refusing to write: the result would not parse in %s:\n%s", shell, newErr))
 }
 
 // parseCheck runs the shell's no-exec parse mode on data. ok=false means the
 // shell is not installed (check skipped); msg is non-empty on a parse error.
 func parseCheck(shell string, data []byte) (msg string, ok bool) {
+	defer logger.Enter()()
 	var bin string
 	var args []string
 	switch shell {
@@ -179,8 +194,10 @@ func parseCheck(shell string, data []byte) (msg string, ok bool) {
 	}
 	path, err := exec.LookPath(bin)
 	if err != nil {
+		logger.Warn("syntax check skipped: %s is not installed", bin)
 		return "", false
 	}
+	logger.Debug("syntax check with %s (%d bytes)", path, len(data))
 	tmp, err := os.CreateTemp("", "envset-syntax-*")
 	if err != nil {
 		return "", false
@@ -199,6 +216,7 @@ func parseCheck(shell string, data []byte) (msg string, ok bool) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
+			logger.Warn("syntax check skipped: %s timed out", bin)
 			return "", false // timed out: don't block on the checker
 		}
 		out := strings.ReplaceAll(strings.TrimSpace(stderr.String()), tmp.Name(), "<new content>")

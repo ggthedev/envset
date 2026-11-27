@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -68,7 +69,7 @@ Every write is atomic and preceded by a backup in ~/.config/envset/backups.
 	// Open the audit log before any subcommand runs.
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		logger.Init(verbose, os.Args)
-		logger.Step("command:" + cmd.Name())
+		logger.Debug("command: %s", cmd.Name())
 		return detector.SetShellOverride(shellFlag)
 	},
 }
@@ -231,7 +232,7 @@ func init() {
 
 	// add flags
 	// Persistent flags (apply to every subcommand)
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Trace flow of control to log file and mirror to stderr")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Write a debug trace of every call to the log file")
 	rootCmd.PersistentFlags().StringVar(&shellFlag, "shell", "", "Place entries for this shell (zsh, bash, fish) instead of auto-detecting; also $ENVSET_SHELL")
 
 	addCmd.Flags().StringVarP(&key, "key", "k", "", "Variable name")
@@ -277,17 +278,22 @@ func init() {
 	lazyCmd.Flags().BoolVar(&lazyWrite, "write", false, "Append the wrapper to your interactive config file")
 }
 
-// Execute runs the root command and finalises the audit log.
+// Execute runs the root command and finalises the log.
 func Execute() {
 	err := rootCmd.Execute()
+	code := 0
 	if err != nil {
-		logger.Result("error: %v", err)
+		code = 1
+		// A command line cobra rejects never reaches PersistentPreRunE. Its
+		// error quotes the arguments, so only the redacted command line is logged.
+		if !logger.Started() {
+			logger.Init(verbose, os.Args)
+			logger.Error(errors.New("invalid command line (details were shown on the terminal)"))
+		} else {
+			logger.Error(err)
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-	} else {
-		logger.Result("ok")
 	}
-	logger.Close()
-	if err != nil {
-		os.Exit(1)
-	}
+	logger.Close(code)
+	os.Exit(code)
 }

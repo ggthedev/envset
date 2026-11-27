@@ -2,6 +2,7 @@ package placer
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +47,7 @@ type Registry struct {
 // registration, BuildSourceChain runs so every ConfigFile carries an accurate
 // EffectiveScope reflecting the actual shell-startup graph on disk.
 func NewRegistry(home, shell string) *Registry {
+	defer logger.Enter()()
 	r := &Registry{
 		Home:  home,
 		Shell: shell,
@@ -57,6 +59,7 @@ func NewRegistry(home, shell string) *Registry {
 }
 
 func (r *Registry) registerDefaults() {
+	defer logger.Enter()()
 	// Standard zsh files
 	if r.Shell == "zsh" || r.Shell == "" {
 		r.add(ConfigFile{Name: "zshenv", Path: filepath.Join(r.Home, ".zshenv"), Scope: ScopeAllSessions, Category: CatGeneric, Priority: 1})
@@ -89,6 +92,7 @@ func (r *Registry) registerDefaults() {
 // They are only registered when they exist on this Mac, so the placer never
 // suggests a file that nothing sources.
 func (r *Registry) registerCustomFiles() {
+	defer logger.Enter()()
 	for _, f := range []ConfigFile{
 		{Name: "gg_system_exports", Path: filepath.Join(r.Home, ".gg_system_exports"), Scope: ScopeAllSessions},
 		{Name: "gg_system_interactive", Path: filepath.Join(r.Home, ".gg_system_interactive"), Scope: ScopeInteractive},
@@ -102,6 +106,7 @@ func (r *Registry) registerCustomFiles() {
 }
 
 func (r *Registry) add(f ConfigFile) {
+	defer logger.Enter()()
 	if _, err := os.Stat(f.Path); err == nil {
 		f.Exists = true
 	}
@@ -110,6 +115,7 @@ func (r *Registry) add(f ConfigFile) {
 
 // FindByName returns a registered file by its short name.
 func (r *Registry) FindByName(name string) (*ConfigFile, error) {
+	defer logger.Enter()()
 	for i := range r.Files {
 		if r.Files[i].Name == name {
 			return &r.Files[i], nil
@@ -120,6 +126,7 @@ func (r *Registry) FindByName(name string) (*ConfigFile, error) {
 
 // ByScope returns files matching the given scope.
 func (r *Registry) ByScope(scope Scope) []ConfigFile {
+	defer logger.Enter()()
 	var out []ConfigFile
 	for _, f := range r.Files {
 		if f.Scope == scope {
@@ -131,6 +138,7 @@ func (r *Registry) ByScope(scope Scope) []ConfigFile {
 
 // AllNames returns all registered file names.
 func (r *Registry) AllNames() []string {
+	defer logger.Enter()()
 	out := make([]string, len(r.Files))
 	for i, f := range r.Files {
 		out[i] = f.Name
@@ -140,6 +148,7 @@ func (r *Registry) AllNames() []string {
 
 // AddCustomFile allows runtime registration of user custom files.
 func (r *Registry) AddCustomFile(name, path string, scope Scope, category Category) {
+	defer logger.Enter()()
 	r.add(ConfigFile{
 		Name:     name,
 		Path:     path,

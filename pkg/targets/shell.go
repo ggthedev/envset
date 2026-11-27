@@ -3,6 +3,7 @@ package targets
 import (
 	"fmt"
 	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ type ShellTarget struct {
 
 // NewShellTarget creates a shell target by name and home directory.
 func NewShellTarget(name, home string) (*ShellTarget, error) {
+	defer logger.Enter()()
 	var path string
 	var shell string
 
@@ -58,9 +60,16 @@ func NewShellTarget(name, home string) (*ShellTarget, error) {
 	return &ShellTarget{name: name, path: path, shell: shell}, nil
 }
 
-func (s *ShellTarget) Name() string { return s.name }
-func (s *ShellTarget) Path() string { return s.path }
+func (s *ShellTarget) Name() string {
+	defer logger.Enter()()
+	return s.name
+}
+func (s *ShellTarget) Path() string {
+	defer logger.Enter()()
+	return s.path
+}
 func (s *ShellTarget) Exists() bool {
+	defer logger.Enter()()
 	_, err := os.Stat(s.path)
 	return err == nil
 }
@@ -69,6 +78,7 @@ func (s *ShellTarget) Exists() bool {
 // adding the same key again updates the existing line instead of appending.
 // PATH is never keyed: replacing someone's PATH line would drop their entries.
 func keyed(key string, vt VarType) bool {
+	defer logger.Enter()()
 	if key == "PATH" {
 		return false
 	}
@@ -82,6 +92,7 @@ func keyed(key string, vt VarType) bool {
 // companionPathLines are the forms of the PATH line written by
 // export_and_path_append for key.
 func companionPathLines(key string) []string {
+	defer logger.Enter()()
 	return []string{
 		fmt.Sprintf(`export PATH="$PATH:$%s"`, key),
 		fmt.Sprintf(`export PATH="$PATH:${%s}"`, key),
@@ -89,6 +100,7 @@ func companionPathLines(key string) []string {
 }
 
 func isCompanion(trimmed, key string) bool {
+	defer logger.Enter()()
 	for _, c := range companionPathLines(key) {
 		if trimmed == c {
 			return true
@@ -100,6 +112,7 @@ func isCompanion(trimmed, key string) bool {
 // Add inserts a new entry, updates an existing definition of the same key in
 // place, or does nothing if an identical line is already active.
 func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions) (AddResult, error) {
+	defer logger.Enter()()
 	newLines, err := s.formatLines(key, value, varType, opts.Quote)
 	if err != nil {
 		return AddResult{}, err
@@ -117,6 +130,10 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 	}
 	res := AddResult{Lines: newLines}
 	entries := s.entries(tf.lines)
+	// Deferred so that it reports the outcome however Add returns.
+	defer func() {
+		logger.Debug("add %s in %s: outcome=%q line=%d append=%v dry_run=%v", logger.SafeKey(key), s.path, res.Outcome, res.LineNum, opts.Append, opts.DryRun)
+	}()
 
 	// A line counts as already present only if it runs unconditionally.
 	hasActiveLine := func(want string) bool {
@@ -208,6 +225,7 @@ func (s *ShellTarget) Add(key, value string, varType VarType, opts WriteOptions)
 
 // entryTypeFor maps a write type to the type parseLine reports for its line.
 func entryTypeFor(vt VarType) VarType {
+	defer logger.Enter()()
 	if vt == VarTypeExportAndPathAppend {
 		return VarTypeExport
 	}
@@ -217,6 +235,7 @@ func entryTypeFor(vt VarType) VarType {
 // Remove deletes or comments out entries for key. Only the matched lines are
 // touched; the rest of the file is preserved byte-for-byte.
 func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, error) {
+	defer logger.Enter()()
 	if err := ValidateKey(key); err != nil {
 		return RemoveResult{}, err
 	}
@@ -278,9 +297,13 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 			return res, nil // already commented out: nothing to do
 		}
 		if opts.Value != "" {
-			return res, fmt.Errorf("no entries for %q containing %q in %s", key, opts.Value, s.path)
+			return res, logger.Private(fmt.Sprintf("no entries for %q containing the given value in %s", key, s.path),
+				fmt.Errorf("no entries for %q containing %q in %s", key, opts.Value, s.path))
 		}
 		return res, fmt.Errorf("no entries found for key %q in %s", key, s.path)
+	}
+	for _, e := range res.Affected {
+		logger.Debug("remove %s in %s: line %d affected", key, s.path, e.LineNum)
 	}
 	if opts.DryRun {
 		return res, nil
@@ -302,6 +325,7 @@ func (s *ShellTarget) Remove(key string, opts RemoveOptions) (RemoveResult, erro
 
 // List returns entries matching key (empty key returns all).
 func (s *ShellTarget) List(key string) ([]Entry, error) {
+	defer logger.Enter()()
 	tf, err := readTextFile(s.path)
 	if err != nil {
 		return nil, err
@@ -317,12 +341,14 @@ func (s *ShellTarget) List(key string) ([]Entry, error) {
 
 // withoutComment is the line's statement, without indentation or comment.
 func withoutComment(line string, e Entry) string {
+	defer logger.Enter()()
 	line = strings.TrimSuffix(line, "\r")
 	return strings.TrimSpace(strings.TrimSuffix(line, e.Comment))
 }
 
 // lineEnding preserves CRLF files line by line.
 func lineEnding(line string) string {
+	defer logger.Enter()()
 	if strings.HasSuffix(line, "\r") {
 		return "\r"
 	}
@@ -330,6 +356,7 @@ func lineEnding(line string) string {
 }
 
 func (s *ShellTarget) Preview(key, value string, varType VarType, quote QuoteMode) (string, error) {
+	defer logger.Enter()()
 	lines, err := s.formatLines(key, value, varType, quote)
 	if err != nil {
 		return "", err
@@ -338,6 +365,7 @@ func (s *ShellTarget) Preview(key, value string, varType VarType, quote QuoteMod
 }
 
 func (s *ShellTarget) formatLines(key, value string, varType VarType, quote QuoteMode) ([]string, error) {
+	defer logger.Enter()()
 	needKey := varType == VarTypeExport || varType == VarTypeExportAndPathAppend || varType == VarTypeFishSet
 	if needKey {
 		if err := ValidateKey(key); err != nil {
@@ -399,6 +427,7 @@ func (s *ShellTarget) formatLines(key, value string, varType VarType, quote Quot
 }
 
 func (s *ShellTarget) parseLine(line string, lineNum int) Entry {
+	defer logger.Enter()()
 	entry := Entry{
 		RawLine: line,
 		LineNum: lineNum,

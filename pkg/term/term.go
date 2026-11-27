@@ -3,6 +3,7 @@
 package term
 
 import (
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -16,6 +17,7 @@ var ForceInteractive *bool
 // must both be terminals. Under cron, CI, pipes, `< /dev/null` or an IDE task
 // this is false and envset must fail fast instead of waiting for input.
 func Interactive() bool {
+	defer logger.Enter()()
 	if ForceInteractive != nil {
 		return *ForceInteractive
 	}
@@ -24,6 +26,7 @@ func Interactive() bool {
 
 // Ask runs a survey prompt on stdin/stderr (never stdout).
 func Ask(p survey.Prompt, response interface{}, opts ...survey.AskOpt) error {
+	defer logger.Enter()()
 	opts = append(opts, survey.WithStdio(os.Stdin, os.Stderr, os.Stderr))
 	return survey.AskOne(p, response, opts...)
 }

@@ -1,9 +1,11 @@
 package logger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -72,108 +74,147 @@ func TestResolveLogPath_ConfigDotEnv(t *testing.T) {
 	}
 }
 
-func TestInitClose_WritesBannerAndDoneMarker(t *testing.T) {
+// readRun initialises a log, runs body, closes and returns the file's text.
+func readRun(t *testing.T, verbose bool, argv []string, body func()) string {
+	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	t.Setenv(EnvLogFile, filepath.Join(tmp, "out.log"))
+	log := filepath.Join(tmp, "out.log")
+	t.Setenv(EnvLogFile, log)
 
-	Init(false, []string{"envset", "add", "--key", "FOO"})
-	Step("write")
-	Info("inputs key=FOO")
-	Result("ok")
-	Close()
+	Init(verbose, argv)
+	body()
+	Close(0)
 
-	b, err := os.ReadFile(filepath.Join(tmp, "out.log"))
+	b, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := string(b)
+	return string(b)
+}
 
-	for _, want := range []string{
-		"RUN ", "cmd  envset add", "STEP",
-		"write", "INFO", "RESULT", "DONE", strings.Repeat("=", 80),
-	} {
-		if !strings.Contains(content, want) {
-			t.Errorf("expected log to contain %q; got:\n%s", want, content)
+var lineRe = regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} (ERROR|WARN |INFO |DEBUG) \[\d+\] \S+:\d+ \S+ +\S.*$`)
+
+func TestEveryLineIsSelfContained(t *testing.T) {
+	got := readRun(t, true, []string{"envset", "add", "--key", "FOO"}, func() {
+		Info("two\nlines\rhere")
+		Warn("careful")
+		Error(errors.New("boom"))
+		Debug("detail")
+	})
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != 6 { // start, four above, end
+		t.Fatalf("%d lines:\n%s", len(lines), got)
+	}
+	for _, l := range lines {
+		if !lineRe.MatchString(l) {
+			t.Errorf("malformed line: %q", l)
+		}
+	}
+	for _, want := range []string{"start envset ", `two\nlines\rhere`, "end exit=0 elapsed=", "ERROR", "boom"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log lacks %q:\n%s", want, got)
 		}
 	}
 }
 
-func TestTraceOnlyWhenVerbose(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv(EnvLogFile, filepath.Join(tmp, "out.log"))
+func traced() { defer Enter()() }
 
-	Init(false, []string{"envset"})
-	Trace("should-not-appear")
-	Close()
+func TestDebugAndTraceOnlyWhenVerbose(t *testing.T) {
+	body := func() { Debug("debug-marker"); traced(); Info("info-marker") }
 
-	b, _ := os.ReadFile(filepath.Join(tmp, "out.log"))
-	if strings.Contains(string(b), "should-not-appear") {
-		t.Errorf("trace line leaked into non-verbose log")
+	quiet := readRun(t, false, []string{"envset"}, body)
+	if strings.Contains(quiet, "DEBUG") || strings.Contains(quiet, "debug-marker") {
+		t.Errorf("debug lines in the default log:\n%s", quiet)
+	}
+	if !strings.Contains(quiet, "info-marker") {
+		t.Errorf("info line missing:\n%s", quiet)
 	}
 
-	// Now verbose
-	t.Setenv(EnvLogFile, filepath.Join(tmp, "v.log"))
-	Init(true, []string{"envset"})
-	Trace("verbose-marker")
-	Close()
-
-	b, _ = os.ReadFile(filepath.Join(tmp, "v.log"))
-	if !strings.Contains(string(b), "verbose-marker") {
-		t.Errorf("trace line missing in verbose log")
+	loud := readRun(t, true, []string{"envset"}, body)
+	for _, want := range []string{"debug-marker", "logger.traced", " enter", " exit after "} {
+		if !strings.Contains(loud, want) {
+			t.Errorf("verbose log lacks %q:\n%s", want, loud)
+		}
 	}
 }
 
 func TestCallerInfoIncluded(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv(EnvLogFile, filepath.Join(tmp, "caller.log"))
-
-	Init(false, []string{"envset"})
-	Step("hello") // recorded line — caller should be this test function
-	Close()
-
-	b, err := os.ReadFile(filepath.Join(tmp, "caller.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(b)
-
-	// Must include both the file and the function name of the caller
-	if !strings.Contains(content, "logger_test.go:") {
-		t.Errorf("caller file missing from log:\n%s", content)
-	}
-	if !strings.Contains(content, "logger.TestCallerInfoIncluded") {
-		t.Errorf("caller function missing from log:\n%s", content)
-	}
-}
-
-func TestCallerInfoFromTrace(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp)
-	t.Setenv(EnvLogFile, filepath.Join(tmp, "trace.log"))
-
-	Init(true, []string{"envset"})
-	Trace("via-trace")
-	Close()
-
-	b, _ := os.ReadFile(filepath.Join(tmp, "trace.log"))
-	if !strings.Contains(string(b), "logger_test.go:") {
-		t.Errorf("Trace lines missing caller info:\n%s", string(b))
+	got := readRun(t, true, []string{"envset"}, func() { Info("a"); Warn("b"); Debug("c"); Error(errors.New("d")) })
+	// Each writer names the function that called it, not the logger.
+	if n := strings.Count(got, "logger.TestCallerInfoIncluded"); n != 4 {
+		t.Errorf("caller named %d times, want 4:\n%s", n, got)
 	}
 }
 
 func TestNoOpWhenNotInitialised(t *testing.T) {
 	// Reset global to nil
-	Close()
+	Close(0)
 	global = nil
 	// These must not panic
-	Step("x")
 	Info("y")
-	QA("q", "a")
-	Result("z")
-	Trace("t")
+	Warn("w")
+	Debug("d")
+	Error(errors.New("e"))
+	Enter()()
+}
+
+func TestSafeArgs(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"/x/bin/envset add --key GITHUB_TOKEN --value s3cr3t --target zshenv",
+			"envset add --key [redacted] --value [redacted] --target zshenv"},
+		{"envset add --value=s3cr3t -ks3cr3t -t zshrc --type=export --dry-run",
+			"envset add --value=[redacted] [redacted] -t zshrc --type=export --dry-run"},
+		{"envset add s3cr3t add --passwrd s3cr3t --value -s3cr3t",
+			"envset add [redacted] [redacted] [redacted] [redacted] --value [redacted]"},
+		{"envset lazy s3cr3t --init-cmd s3cr3t --write", "envset lazy [redacted] --init-cmd [redacted] --write"},
+		{"envset remove --comment=s3cr3t -- s3cr3t", "envset remove --comment=[redacted] -- [redacted]"},
+		{"envset s3cr3t", "envset [redacted]"},
+	}
+	for _, c := range cases {
+		in := strings.Fields(c.in)
+		got := strings.Join(SafeArgs(in), " ")
+		if got != c.want {
+			t.Errorf("SafeArgs(%q)\n got %q\nwant %q", c.in, got, c.want)
+		}
+		if strings.Join(in, " ") != c.in {
+			t.Error("input slice was modified")
+		}
+	}
+}
+
+func TestSafeKeyAndPrivate(t *testing.T) {
+	for in, want := range map[string]string{"FOO_1": "FOO_1", "": "", "FOO=s3cr3t": "[invalid]", "1X": "[invalid]"} {
+		if got := SafeKey(in); got != want {
+			t.Errorf("SafeKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+	inner := Private("bad name", errors.New(`bad name "s3cr3t"`))
+	wrapped := fmt.Errorf("adding: %w", inner)
+	if got := LogMessage(wrapped); got != "adding: bad name" {
+		t.Errorf("LogMessage = %q", got)
+	}
+	if !strings.Contains(wrapped.Error(), "s3cr3t") {
+		t.Error("the terminal message lost its detail")
+	}
+	if got := LogMessage(errors.New("plain")); got != "plain" {
+		t.Errorf("LogMessage = %q", got)
+	}
+}
+
+func TestInitFileIsPrivate(t *testing.T) {
+	tmp := t.TempDir()
+	log := filepath.Join(tmp, "out.log")
+	t.Setenv(EnvLogFile, log)
+	os.WriteFile(log, []byte("old\n"), 0o644) // as created by older versions
+
+	Init(false, []string{"envset"})
+	Close(0)
+
+	fi, _ := os.Stat(log)
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("log mode %v, want 0600", fi.Mode().Perm())
+	}
 }
 
 func TestResolveLogPath_XDGAndNoCwdDotEnv(t *testing.T) {
@@ -194,39 +235,6 @@ func TestResolveLogPath_XDGAndNoCwdDotEnv(t *testing.T) {
 	want := filepath.Join(tmp, "xdg", "envset", "logs", "envset.log")
 	if got != want {
 		t.Errorf("path = %s, want %s", got, want)
-	}
-}
-
-func TestRedactArgs(t *testing.T) {
-	in := []string{"envset", "add", "--key", "GITHUB_TOKEN", "--value", "ghp_secret", "--value=ghp_two", "--target", "zshenv"}
-	got := strings.Join(RedactArgs(in), " ")
-	if strings.Contains(got, "ghp_") {
-		t.Fatalf("secret leaked: %s", got)
-	}
-	if !strings.Contains(got, "--value [redacted] --value=[redacted] --target zshenv") {
-		t.Fatalf("unexpected: %s", got)
-	}
-	if in[5] != "ghp_secret" {
-		t.Fatal("input slice was modified")
-	}
-}
-
-func TestInitBannerRedactsAndFileIsPrivate(t *testing.T) {
-	tmp := t.TempDir()
-	log := filepath.Join(tmp, "out.log")
-	t.Setenv(EnvLogFile, log)
-	os.WriteFile(log, []byte("old\n"), 0o644) // as created by older versions
-
-	Init(false, []string{"envset", "add", "--key", "FOO_TOKEN", "--value", "s3cr3t"})
-	Close()
-
-	b, _ := os.ReadFile(log)
-	if strings.Contains(string(b), "s3cr3t") {
-		t.Fatalf("banner leaked value:\n%s", b)
-	}
-	fi, _ := os.Stat(log)
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("log mode %v, want 0600", fi.Mode().Perm())
 	}
 }
 
@@ -270,7 +278,7 @@ func TestNoLogWithoutHome(t *testing.T) {
 
 	Init(false, []string{"envset", "detect"})
 	Info("x")
-	Close()
+	Close(0)
 	if entries, _ := os.ReadDir(proj); len(entries) != 0 {
 		t.Fatalf("created %v in the working directory", entries)
 	}

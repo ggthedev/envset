@@ -3,6 +3,7 @@ package detector
 import (
 	"context"
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"os/exec"
 	"os/user"
@@ -46,6 +47,7 @@ var override string
 var SupportedShells = []string{"zsh", "bash", "fish"}
 
 func isSupported(s string) bool {
+	defer logger.Enter()()
 	for _, x := range SupportedShells {
 		if s == x {
 			return true
@@ -56,6 +58,7 @@ func isSupported(s string) bool {
 
 // SetShellOverride forces the user shell (from --shell). Empty clears it.
 func SetShellOverride(shell string) error {
+	defer logger.Enter()()
 	if shell != "" && !isSupported(shell) {
 		return fmt.Errorf("unsupported shell %q (want one of %s)", shell, strings.Join(SupportedShells, ", "))
 	}
@@ -65,6 +68,7 @@ func SetShellOverride(shell string) error {
 
 // Detect gathers environment information.
 func Detect() (*Info, error) {
+	defer logger.Enter()()
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return nil, fmt.Errorf("could not determine home directory (is $HOME set?): %v", err)
@@ -94,6 +98,7 @@ func Detect() (*Info, error) {
 // default). sh/dash/ksh/csh are skipped wherever they appear: they mean
 // "a script is running", not "this is the user's shell".
 func resolveUserShell(flag, envOverride string, tree []string, shellEnv string, dscl func() string) (shell, source string) {
+	defer logger.Enter()()
 	if flag != "" {
 		return flag, "--shell flag"
 	}
@@ -118,6 +123,7 @@ func resolveUserShell(flag, envOverride string, tree []string, shellEnv string, 
 
 // detectLoginShell determines the login shell from $SHELL env var.
 func detectLoginShell() string {
+	defer logger.Enter()()
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		return "unknown"
@@ -136,6 +142,7 @@ var procInfo = psProcInfo
 // shellsInTree walks up from pid and returns every known shell it passes,
 // nearest first.
 func shellsInTree(pid int, info func(int) (int, string, error)) []string {
+	defer logger.Enter()()
 	var out []string
 	visited := map[int]bool{}
 	for i := 0; pid > 1 && !visited[pid] && i < 64; i++ {
@@ -155,10 +162,12 @@ func shellsInTree(pid int, info func(int) (int, string, error)) []string {
 // shellName normalises a ps comm value: "-zsh" (login shell) -> "zsh",
 // "/bin/bash" -> "bash".
 func shellName(comm string) string {
+	defer logger.Enter()()
 	return strings.TrimPrefix(filepath.Base(strings.TrimSpace(comm)), "-")
 }
 
 func psProcInfo(pid int) (int, string, error) {
+	defer logger.Enter()()
 	out, err := exec.Command(sysBin("ps", "/bin/ps"), "-o", "ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return 0, "", err
@@ -170,6 +179,7 @@ func psProcInfo(pid int) (int, string, error) {
 // the first field, so paths with spaces (".../Visual Studio Code.app/...")
 // survive intact.
 func parsePSLine(line string) (int, string, error) {
+	defer logger.Enter()()
 	line = strings.TrimSpace(line)
 	i := strings.IndexAny(line, " \t")
 	if i < 0 {
@@ -185,6 +195,7 @@ func parsePSLine(line string) (int, string, error) {
 // sysBin prefers the fixed system path so lookups work with an empty $PATH
 // (cron, launchd, env -i), falling back to a $PATH search.
 func sysBin(name, abs string) string {
+	defer logger.Enter()()
 	if _, err := os.Stat(abs); err == nil {
 		return abs
 	}
@@ -194,6 +205,7 @@ func sysBin(name, abs string) string {
 // dsclShell asks the macOS directory service for the user's login shell,
 // which is right even when $SHELL is unset (cron, launchd, env -i).
 func dsclShell() string {
+	defer logger.Enter()()
 	if runtime.GOOS != "darwin" {
 		return ""
 	}
@@ -220,6 +232,7 @@ func dsclShell() string {
 }
 
 func detectShellConfigs(home string) []ShellConfig {
+	defer logger.Enter()()
 	configs := []ShellConfig{
 		{Name: ".zshrc", Path: filepath.Join(home, ".zshrc"), Shell: "zsh", Priority: 1},
 		{Name: ".zprofile", Path: filepath.Join(home, ".zprofile"), Shell: "zsh", Priority: 2},
@@ -242,6 +255,7 @@ func detectShellConfigs(home string) []ShellConfig {
 
 // SuggestConfig returns the best config file for the detected shell.
 func (i *Info) SuggestConfig() *ShellConfig {
+	defer logger.Enter()()
 	var best *ShellConfig
 	for idx := range i.ShellConfigs {
 		c := &i.ShellConfigs[idx]
@@ -266,6 +280,7 @@ func (i *Info) SuggestConfig() *ShellConfig {
 
 // IsSecret detects if a variable name looks like a secret/API key.
 func IsSecret(key string) bool {
+	defer logger.Enter()()
 	lower := strings.ToLower(key)
 	patterns := []string{
 		"secret", "token", "password", "passwd", "api_key", "apikey",
@@ -282,6 +297,7 @@ func IsSecret(key string) bool {
 
 // ShellExists checks if a shell binary is available.
 func ShellExists(name string) bool {
+	defer logger.Enter()()
 	_, err := exec.LookPath(name)
 	return err == nil
 }

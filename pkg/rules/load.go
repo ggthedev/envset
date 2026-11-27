@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,10 +16,14 @@ import (
 
 // Dir returns the directory that holds rules files: ~/.config/envset/.
 // Honours $XDG_CONFIG_HOME when set.
-func Dir() (string, error) { return fsutil.ConfigDir() }
+func Dir() (string, error) {
+	defer logger.Enter()()
+	return fsutil.ConfigDir()
+}
 
 // Paths returns the absolute paths of ideals.json and custom.json.
 func Paths() (idealsPath, customPath string, err error) {
+	defer logger.Enter()()
 	d, err := Dir()
 	if err != nil {
 		return "", "", err
@@ -47,6 +52,7 @@ type Loaded struct {
 // Rule paths under $HOME are normalised to ~/… so a synced config works on
 // every Mac regardless of username.
 func Load(envsetVersion string) (Loaded, error) {
+	defer logger.Enter()()
 	idealsPath, customPath, err := Paths()
 	if err != nil {
 		return Loaded{}, err
@@ -80,6 +86,7 @@ func Load(envsetVersion string) (Loaded, error) {
 // covers reports whether every built-in check is present, so an ideals.json
 // written by an older binary is refreshed when new checks are added.
 func (i Ideals) covers(builtin Ideals) bool {
+	defer logger.Enter()()
 	for _, c := range builtin.Checks {
 		if i.FindCheck(c.ID) == nil {
 			return false
@@ -90,6 +97,7 @@ func (i Ideals) covers(builtin Ideals) bool {
 
 // PersistIdeals writes ideals.json if Load found it missing or stale.
 func PersistIdeals(l Loaded) error {
+	defer logger.Enter()()
 	if !l.IdealsStale {
 		return nil
 	}
@@ -103,6 +111,7 @@ func PersistIdeals(l Loaded) error {
 // LoadOrInit loads both rule files and creates or refreshes them on disk.
 // A malformed custom.json is an error here (it is never overwritten).
 func LoadOrInit(envsetVersion string) (Ideals, Custom, error) {
+	defer logger.Enter()()
 	l, err := Load(envsetVersion)
 	if err != nil {
 		return Ideals{}, Custom{}, err
@@ -125,6 +134,7 @@ func LoadOrInit(envsetVersion string) (Ideals, Custom, error) {
 // PortablePath stores a path under $HOME as ~/…, so rules written on one Mac
 // match the same file on another Mac with a different username.
 func PortablePath(p string) string {
+	defer logger.Enter()()
 	if p == "" || strings.HasPrefix(p, "~") {
 		return p
 	}
@@ -133,6 +143,7 @@ func PortablePath(p string) string {
 
 // ExpandPath turns a ~/… rule path back into an absolute path for this Mac.
 func ExpandPath(p string) string {
+	defer logger.Enter()()
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			return home + p[1:]
@@ -144,6 +155,7 @@ func ExpandPath(p string) string {
 // SaveCustom writes the custom rules atomically to ~/.config/envset/custom.json.
 // Used by `audit --fix` after the interactive session.
 func SaveCustom(c Custom) error {
+	defer logger.Enter()()
 	_, customPath, err := Paths()
 	if err != nil {
 		return err
@@ -156,6 +168,7 @@ func SaveCustom(c Custom) error {
 // Hybrid keying: a rule matches when File matches AND (Subject matches OR LineHash matches).
 // If a rule has only one of Subject/LineHash, only that field is consulted.
 func FindMatching(c Custom, checkID, file, subject, lineHash string) *CustomRule {
+	defer logger.Enter()()
 	for k := range c.Rules {
 		r := &c.Rules[k]
 		if r.CheckID != checkID || ExpandPath(r.Match.File) != ExpandPath(file) {
@@ -174,6 +187,7 @@ func FindMatching(c Custom, checkID, file, subject, lineHash string) *CustomRule
 // LineHash returns a 24-hex-char fingerprint of a line's trimmed content.
 // Used as the fallback identifier when no subject token is available.
 func LineHash(line string) string {
+	defer logger.Enter()()
 	sum := sha256.Sum256([]byte(strings.TrimSpace(line)))
 	return hex.EncodeToString(sum[:])[:24]
 }
@@ -183,6 +197,7 @@ func LineHash(line string) string {
 // Called from `audit --fix` so users see current impact estimates even after
 // the auditor's defaults are tuned.
 func RefreshImpacts(custom *Custom, ideals Ideals) bool {
+	defer logger.Enter()()
 	changed := false
 	for i := range custom.Rules {
 		check := ideals.FindCheck(custom.Rules[i].CheckID)
@@ -203,6 +218,7 @@ func RefreshImpacts(custom *Custom, ideals Ideals) bool {
 // so syncing the config between Macs never erases the other Mac's rules.
 // Returns the number pruned.
 func PruneStale(custom *Custom) int {
+	defer logger.Enter()()
 	home, _ := os.UserHomeDir()
 	out := custom.Rules[:0]
 	pruned := 0
@@ -226,6 +242,7 @@ func PruneStale(custom *Custom) int {
 // ---------- helpers ----------
 
 func readIdeals(path string) (Ideals, error) {
+	defer logger.Enter()()
 	var i Ideals
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -238,6 +255,7 @@ func readIdeals(path string) (Ideals, error) {
 }
 
 func readCustom(path string) (Custom, error) {
+	defer logger.Enter()()
 	var c Custom
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -250,6 +268,7 @@ func readCustom(path string) (Custom, error) {
 }
 
 func writeJSON(path string, v any) error {
+	defer logger.Enter()()
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

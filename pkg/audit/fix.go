@@ -3,6 +3,7 @@ package audit
 import (
 	"fmt"
 	"github.com/experimentalist/envset/pkg/fsutil"
+	"github.com/experimentalist/envset/pkg/logger"
 	"io"
 	"os"
 	"sort"
@@ -23,6 +24,7 @@ type FixOp struct {
 // Only findings with a non-nil Fix field contribute operations.
 // Lines that are already commented out are silently skipped.
 func BuildFixOps(r Report) ([]FixOp, error) {
+	defer logger.Enter()()
 	// Load each file referenced by any fix edit once.
 	fileCache := map[string][]string{}
 	for _, f := range r.Findings {
@@ -88,6 +90,7 @@ func BuildFixOps(r Report) ([]FixOp, error) {
 
 // PrintDiff writes a human-readable diff preview of all pending fix operations.
 func PrintDiff(w io.Writer, ops []FixOp) {
+	defer logger.Enter()()
 	useColor := isTerminal(w)
 
 	if len(ops) == 0 {
@@ -127,6 +130,7 @@ func PrintDiff(w io.Writer, ops []FixOp) {
 // nothing is written at all. Each file is then written atomically, after a
 // shell syntax check, with all other bytes preserved exactly.
 func ApplyFixes(ops []FixOp) (map[string]string, error) {
+	defer logger.Enter()()
 	if len(ops) == 0 {
 		return nil, nil
 	}
@@ -194,6 +198,7 @@ func ApplyFixes(ops []FixOp) (map[string]string, error) {
 
 // CountFixable returns the number of findings in r that have an auto-fix.
 func CountFixable(r Report) int {
+	defer logger.Enter()()
 	var n int
 	for _, f := range r.Findings {
 		if f.Fixable() {

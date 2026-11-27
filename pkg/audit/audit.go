@@ -3,6 +3,7 @@ package audit
 import (
 	"bufio"
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"regexp"
 	"strings"
@@ -18,12 +19,14 @@ type Auditor struct {
 
 // New creates an auditor backed by the provided registry.
 func New(reg *placer.Registry) *Auditor {
+	defer logger.Enter()()
 	return &Auditor{Registry: reg}
 }
 
 // Run executes all checks against every existing file in the registry and
 // returns a consolidated Report.
 func (a *Auditor) Run() Report {
+	defer logger.Enter()()
 	var findings []Finding
 
 	// Read every file once into memory keyed by path.
@@ -70,6 +73,7 @@ func (a *Auditor) Run() Report {
 // Matching uses the hybrid scheme implemented in pkg/rules.FindMatching:
 // subject token match preferred, line-content hash as fallback.
 func (r *Report) ApplyCustomRules(custom rules.Custom) {
+	defer logger.Enter()()
 	for i := range r.Findings {
 		f := &r.Findings[i]
 		hash := rules.LineHash(f.Code)
@@ -85,6 +89,7 @@ func (r *Report) ApplyCustomRules(custom rules.Custom) {
 // checkBrokenPath flags PATH= assignments that nest unquoted echo or have
 // obviously broken quoting that silently corrupts $PATH.
 func checkBrokenPath(path string, lines []string) []Finding {
+	defer logger.Enter()()
 	var out []Finding
 	// Pattern: PATH="echo ... — literal echo prepended to PATH
 	echoBug := regexp.MustCompile(`(?:export\s+)?PATH\s*=\s*"\s*echo\s+`)
@@ -123,6 +128,7 @@ var (
 // not expand ~ inside quotes, so zsh and other programs never search that
 // directory (only bash's own command lookup would).
 func checkQuotedTildePath(path string, lines []string) []Finding {
+	defer logger.Enter()()
 	var out []Finding
 	for i, ln := range lines {
 		trim := strings.TrimSpace(ln)
@@ -154,6 +160,7 @@ func checkQuotedTildePath(path string, lines []string) []Finding {
 
 // checkMisplacedPathExports flags PATH-mutating exports placed in interactive-only files.
 func checkMisplacedPathExports(cf placer.ConfigFile, lines []string) []Finding {
+	defer logger.Enter()()
 	if cf.Scope != placer.ScopeInteractive {
 		return nil
 	}
@@ -192,6 +199,7 @@ func checkMisplacedPathExports(cf placer.ConfigFile, lines []string) []Finding {
 // file is registered with a broader scope than the sourcing file
 // (e.g. all-sessions content sourced from a login-only file).
 func checkSourceChainMismatch(cf placer.ConfigFile, lines []string, reg *placer.Registry) []Finding {
+	defer logger.Enter()()
 	var out []Finding
 	sourceLine := regexp.MustCompile(`^\s*(?:source|\.)\s+(\S+)`)
 	for i, ln := range lines {
@@ -233,6 +241,7 @@ func checkSourceChainMismatch(cf placer.ConfigFile, lines []string, reg *placer.
 
 // checkDuplicateCompinit flags multiple compinit invocations in the same file.
 func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
+	defer logger.Enter()()
 	if cf.Scope != placer.ScopeInteractive {
 		return nil
 	}
@@ -295,6 +304,7 @@ func checkDuplicateCompinit(cf placer.ConfigFile, lines []string) []Finding {
 // in interactive files that aren't wrapped in a lazy-load function or otherwise
 // guarded (case branches, cache-prime ifs).
 func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string, bctx *BlockContext) []Finding {
+	defer logger.Enter()()
 	if cf.Scope != placer.ScopeInteractive {
 		return nil
 	}
@@ -351,6 +361,7 @@ func checkSlowInteractiveInits(cf placer.ConfigFile, lines []string, bctx *Block
 
 // checkDuplicateKeysAcrossFiles flags the same KEY exported in >1 file.
 func checkDuplicateKeysAcrossFiles(reg *placer.Registry, files map[string][]string) []Finding {
+	defer logger.Enter()()
 	exportRe := regexp.MustCompile(`^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=`)
 	type loc struct {
 		Path string
@@ -423,6 +434,7 @@ func checkDuplicateKeysAcrossFiles(reg *placer.Registry, files map[string][]stri
 // ---------- helpers ----------
 
 func readLines(path string) ([]string, error) {
+	defer logger.Enter()()
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -438,6 +450,7 @@ func readLines(path string) ([]string, error) {
 }
 
 func expandHome(p, home string) string {
+	defer logger.Enter()()
 	if strings.HasPrefix(p, "~/") {
 		return home + p[1:]
 	}
@@ -454,6 +467,7 @@ func expandHome(p, home string) string {
 //
 //	all_sessions > login > interactive
 func scopeBroaderThan(a, b placer.Scope) bool {
+	defer logger.Enter()()
 	rank := map[placer.Scope]int{
 		placer.ScopeInteractive: 1,
 		placer.ScopeLogin:       2,
@@ -466,6 +480,7 @@ func scopeBroaderThan(a, b placer.Scope) bool {
 // body whose name starts with toolName. Heuristic: scan up to 30 lines before
 // for a `funcName() {` or `function funcName` declaration.
 func isLazyWrapped(lines []string, i int, toolName string) bool {
+	defer logger.Enter()()
 	start := i - 30
 	if start < 0 {
 		start = 0
@@ -487,6 +502,7 @@ func isLazyWrapped(lines []string, i int, toolName string) bool {
 }
 
 func firstWord(s string) string {
+	defer logger.Enter()()
 	for i, r := range s {
 		if r == ' ' || r == '\t' {
 			return s[:i]
@@ -496,6 +512,7 @@ func firstWord(s string) string {
 }
 
 func ternary(cond bool, a, b string) string {
+	defer logger.Enter()()
 	if cond {
 		return a
 	}

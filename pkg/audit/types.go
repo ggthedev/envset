@@ -1,5 +1,7 @@
 package audit
 
+import "github.com/experimentalist/envset/pkg/logger"
+
 // Severity classifies the importance of a finding.
 type Severity string
 
@@ -50,6 +52,7 @@ type Finding struct {
 
 // Fixable reports whether this finding has a safe automatic fix.
 func (f Finding) Fixable() bool {
+	defer logger.Enter()()
 	return f.Fix != nil && len(f.Fix.Edits) > 0
 }
 
@@ -60,6 +63,7 @@ type Report struct {
 
 // CountBySeverity returns how many findings of each severity exist.
 func (r Report) CountBySeverity() map[Severity]int {
+	defer logger.Enter()()
 	m := map[Severity]int{SevError: 0, SevWarn: 0, SevInfo: 0}
 	for _, f := range r.Findings {
 		m[f.Severity]++

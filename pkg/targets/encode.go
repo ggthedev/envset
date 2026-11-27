@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/experimentalist/envset/pkg/logger"
 )
 
 // QuoteMode controls how a value is encoded into a shell config line.
@@ -28,8 +30,10 @@ var keyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // ValidateKey rejects anything that is not a plain shell variable name, so a
 // key can never inject code into the line it is written to.
 func ValidateKey(key string) error {
+	defer logger.Enter()()
 	if !keyRe.MatchString(key) {
-		return fmt.Errorf("invalid variable name %q: use letters, digits and underscores, not starting with a digit", key)
+		return logger.Private("invalid variable name",
+			fmt.Errorf("invalid variable name %q: use letters, digits and underscores, not starting with a digit", key))
 	}
 	return nil
 }
@@ -40,10 +44,12 @@ var bareChars = regexp.MustCompile(`^[A-Za-z0-9_./:@%+,=-]+$`)
 // a word starting "=" to a command's path, also after ":" in an assignment, so
 // such values are quoted.
 func bare(v string) bool {
+	defer logger.Enter()()
 	return bareChars.MatchString(v) && !strings.HasPrefix(v, "=") && !strings.Contains(v, ":=")
 }
 
 func checkNoNewline(v string) error {
+	defer logger.Enter()()
 	if strings.ContainsAny(v, "\x00\n\r") {
 		return fmt.Errorf("value must be a single line (contains a newline or NUL byte)")
 	}
@@ -51,6 +57,7 @@ func checkNoNewline(v string) error {
 }
 
 func checkExpandable(v string) error {
+	defer logger.Enter()()
 	if err := checkNoNewline(v); err != nil {
 		return err
 	}
@@ -62,6 +69,7 @@ func checkExpandable(v string) error {
 }
 
 func tildeToHome(v string) string {
+	defer logger.Enter()()
 	if v == "~" {
 		return "$HOME"
 	}
@@ -74,16 +82,19 @@ func tildeToHome(v string) string {
 // posixDoubleInner escapes v for use inside a POSIX double-quoted string,
 // leaving $ live for variable expansion.
 func posixDoubleInner(v string) string {
+	defer logger.Enter()()
 	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(tildeToHome(v))
 }
 
 func posixSingle(v string) string {
+	defer logger.Enter()()
 	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
 }
 
 // encodePosix encodes a value as a complete shell word for sh/bash/zsh.
 // forceQuote always produces quotes (used by launchd for readability).
 func encodePosix(v string, mode QuoteMode, forceQuote bool) (string, error) {
+	defer logger.Enter()()
 	switch mode {
 	case QuoteRaw:
 		return v, checkNoNewline(v)
@@ -111,6 +122,7 @@ func encodePosix(v string, mode QuoteMode, forceQuote bool) (string, error) {
 // encodePosixPathElem encodes v as the dir to splice into "$PATH:<dir>".
 // The result is placed directly inside an existing double-quoted string.
 func encodePosixPathElem(v string, mode QuoteMode) (string, error) {
+	defer logger.Enter()()
 	switch mode {
 	case QuoteRaw:
 		return v, checkNoNewline(v)
@@ -133,11 +145,13 @@ func encodePosixPathElem(v string, mode QuoteMode) (string, error) {
 // fishSingle quotes v literally for fish, where (unlike POSIX shells)
 // backslash still escapes "\" and "'" inside single quotes.
 func fishSingle(v string) string {
+	defer logger.Enter()()
 	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'"
 }
 
 // encodeFishPathElem is encodePosixPathElem for fish files.
 func encodeFishPathElem(v string, mode QuoteMode) (string, error) {
+	defer logger.Enter()()
 	if mode == QuoteLiteral {
 		if err := checkNoNewline(v); err != nil {
 			return "", err
@@ -149,6 +163,7 @@ func encodeFishPathElem(v string, mode QuoteMode) (string, error) {
 
 // encodeFish encodes a value as a fish word.
 func encodeFish(v string, mode QuoteMode) (string, error) {
+	defer logger.Enter()()
 	switch mode {
 	case QuoteRaw:
 		return v, checkNoNewline(v)
@@ -175,6 +190,7 @@ func encodeFish(v string, mode QuoteMode) (string, error) {
 
 // unquoteValue reverses the quoting envset writes, for display and comparison.
 func unquoteValue(v string) string {
+	defer logger.Enter()()
 	v = strings.TrimSpace(v)
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
 		return strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(v[1 : len(v)-1])

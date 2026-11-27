@@ -2,6 +2,7 @@ package placer
 
 import (
 	"bufio"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"regexp"
 	"strings"
@@ -24,6 +25,7 @@ var sourceLineRe = regexp.MustCompile(`^\s*(?:source|\.)\s+(\S+)`)
 // is declared all_sessions but is only sourced from .zprofile (login scope) —
 // in that case EffectiveScope is login, signalling a broken source-chain.
 func (r *Registry) BuildSourceChain() {
+	defer logger.Enter()()
 	// Index files by absolute path for O(1) lookup.
 	byPath := map[string]*ConfigFile{}
 	for i := range r.Files {
@@ -77,6 +79,7 @@ type sourceRef struct {
 // referenced by a `source <path>` or `. <path>` directive (with ~ / $HOME
 // expanded). Comment lines are ignored.
 func parseSourceLines(path, home string) ([]sourceRef, error) {
+	defer logger.Enter()()
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -107,6 +110,7 @@ func parseSourceLines(path, home string) ([]sourceRef, error) {
 // For files not sourced from anything (or sourced only from unknown files),
 // the declared Scope is used. visited prevents infinite recursion on cycles.
 func computeEffectiveScope(f *ConfigFile, byPath map[string]*ConfigFile, visited map[string]bool) Scope {
+	defer logger.Enter()()
 	if visited[f.Path] {
 		return f.Scope // cycle protection
 	}
@@ -137,6 +141,7 @@ func computeEffectiveScope(f *ConfigFile, byPath map[string]*ConfigFile, visited
 // more shells. Used by the placer to penalise broken source-chains and by the
 // audit pass to flag scope mismatches.
 func scopeRank(s Scope) int {
+	defer logger.Enter()()
 	switch s {
 	case ScopeInteractive:
 		return 1
@@ -150,11 +155,13 @@ func scopeRank(s Scope) int {
 
 // scopeBroaderOrEqual returns true if a reaches at least as many shells as b.
 func scopeBroaderOrEqual(a, b Scope) bool {
+	defer logger.Enter()()
 	return scopeRank(a) >= scopeRank(b)
 }
 
 // expandHomePath expands a leading "~/" or "$HOME/" to the supplied home dir.
 func expandHomePath(p, home string) string {
+	defer logger.Enter()()
 	if home == "" {
 		return p
 	}

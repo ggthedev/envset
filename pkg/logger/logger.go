@@ -1,12 +1,15 @@
-// Package logger provides an audit-trail logger for the envset CLI.
+// Package logger writes envset's log.
 //
-// All log entries are written to a file only; nothing is mirrored to the
-// terminal so program output (stdout/stderr) stays clean. Verbose mode adds
-// per-method TRACE detail to the same file. Use `tail -f` on the log path
-// (printed once on stderr at startup when --verbose) to watch flow live.
+// One self-contained line per event, in a file only: program output
+// (stdout/stderr) stays clean. ERROR, WARN and INFO are always written; DEBUG,
+// which includes a trace of every function call, only with --verbose.
 //
-// Each CLI invocation is delimited by an 80-char rule and an RFC3339 timestamp
-// so multiple runs in the same file remain easy to scan.
+//	2026-11-28 09:12:03.114 INFO  [4812] pkg/ops/ops.go:168 ops.Add   add: updated EDITOR in ~/.zshenv
+//
+// No values, file lines, command output or raw arguments are logged at any
+// level: see redact.go.
+//
+// Every other package calls into this one, so it must import only leaf packages.
 package logger
 
 import (
@@ -16,10 +19,12 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/experimentalist/envset/pkg/version"
 )
 
-// Logger is the audit-trail writer. There is normally one global instance
-// owned by the CLI; access it via the package-level convenience functions.
+// Logger is the log writer. There is normally one global instance owned by the
+// CLI; access it via the package-level convenience functions.
 type Logger struct {
 	file     *os.File
 	verbose  bool
@@ -30,9 +35,9 @@ type Logger struct {
 
 var global *Logger
 
-// Init opens the log file (creating parents as needed) and writes a run banner.
-// argv should be os.Args. Failure to open the log file is non-fatal: a warning
-// is printed to stderr and subsequent calls become no-ops.
+// Init opens the log file (creating parents as needed) and logs the start of
+// the run. argv should be os.Args. Failure to open the log file is non-fatal: a
+// warning is printed to stderr and subsequent calls become no-ops.
 func Init(verbose bool, argv []string) {
 	path := ResolveLogPath()
 	if path == "" {
@@ -44,7 +49,7 @@ func Init(verbose bool, argv []string) {
 		global = &Logger{disabled: true}
 		return
 	}
-	rotate(path, MaxLogSize, LogGenerations)
+	rotateErr := rotate(path, MaxLogSize, LogGenerations)
 	// The log records commands and file paths: keep it private to the user.
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -60,29 +65,33 @@ func Init(verbose bool, argv []string) {
 		started: time.Now(),
 		path:    path,
 	}
-	global.writeBanner(argv)
+	emit(levelInfo, callerInfo(2), fmt.Sprintf("start envset %s verbose=%v: %s",
+		version.String(), verbose, strings.Join(SafeArgs(argv), " ")))
+	if rotateErr != nil {
+		Warn("log rotation failed: %v", rotateErr)
+	}
 
-	// One-line hint so the user knows where to tail when --verbose is on.
-	// We deliberately do NOT mirror every log entry to the terminal: program
+	// One-line hint so the user knows where to look when --verbose is on.
+	// We deliberately do NOT mirror log entries to the terminal: program
 	// output (stdout/stderr) must stay clean for piping/scripting.
 	if verbose {
 		fmt.Fprintf(os.Stderr, "[envset] verbose log: %s  (tail -f to watch)\n", path)
 	}
 }
 
-// Close finalises the current run: writes a "DONE" line + elapsed time and a
-// closing rule, then closes the underlying file. Safe to call multiple times.
-func Close() {
+// Close logs the end of the run with its exit code and elapsed time, then
+// closes the file. Safe to call multiple times.
+func Close(exitCode int) {
 	if global == nil || global.disabled || global.file == nil {
 		return
 	}
-	fmt.Fprintf(global.file, "%s [DONE ] elapsed=%s\n",
-		ts(), time.Since(global.started).Round(time.Millisecond))
-	fmt.Fprintln(global.file, strings.Repeat("=", 80))
-	fmt.Fprintln(global.file)
+	emit(levelInfo, callerInfo(2), fmt.Sprintf("end exit=%d elapsed=%s", exitCode, time.Since(global.started).Round(time.Millisecond)))
 	_ = global.file.Close()
 	global.file = nil
 }
+
+// Started reports whether Init has been called.
+func Started() bool { return global != nil }
 
 // Path returns the absolute path of the active log file (empty if disabled).
 func Path() string {
@@ -92,64 +101,86 @@ func Path() string {
 	return global.path
 }
 
-// Verbose reports whether trace logging is enabled.
+// Verbose reports whether debug logging is enabled.
 func Verbose() bool {
 	return global != nil && global.verbose
 }
 
 // ---------- writers ----------
 
-// Step records a high-level pipeline boundary, e.g. "auto-placement".
-func Step(name string) { write("STEP", "%s", name) }
+const (
+	levelError = "ERROR"
+	levelWarn  = "WARN"
+	levelInfo  = "INFO"
+	levelDebug = "DEBUG"
+)
 
-// Info writes an always-on entry.
-func Info(format string, a ...any) { write("INFO", format, a...) }
-
-// Input records the parsed inputs for the current command.
-func Input(format string, a ...any) { write("INPUT", format, a...) }
-
-// QA records a wizard question and the user's answer.
-func QA(question, answer string) { write("Q&A", "%s -> %s", question, answer) }
-
-// Decision records a non-trivial choice the placer/auditor made.
-func Decision(format string, a ...any) { write("DECIDE", format, a...) }
-
-// Result writes the final outcome line for a command.
-func Result(format string, a ...any) { write("RESULT", format, a...) }
-
-// Trace writes a verbose-only flow line. No-op when verbose is off.
-func Trace(format string, a ...any) {
-	if global == nil || global.disabled || !global.verbose {
-		return
+// Error records a failure or refusal. An error made with Private is logged by
+// its safe message.
+func Error(err error) {
+	if active() {
+		emit(levelError, callerInfo(2), LogMessage(err))
 	}
-	write("TRACE", format, a...)
 }
 
-// Warn writes a warning entry (always on).
-func Warn(format string, a ...any) { write("WARN", format, a...) }
+// Warn records something that did not stop the command but deserves a look.
+func Warn(format string, a ...any) {
+	if active() {
+		emit(levelWarn, callerInfo(2), fmt.Sprintf(format, a...))
+	}
+}
+
+// Info records what a command did: always written.
+func Info(format string, a ...any) {
+	if active() {
+		emit(levelInfo, callerInfo(2), fmt.Sprintf(format, a...))
+	}
+}
+
+// Debug records detail for troubleshooting; a no-op unless verbose.
+func Debug(format string, a ...any) {
+	if active() && global.verbose {
+		emit(levelDebug, callerInfo(2), fmt.Sprintf(format, a...))
+	}
+}
+
+func noop() {}
+
+// Enter traces a function call when verbose. Every function outside this
+// package starts with
+//
+//	defer logger.Enter()()
+//
+// which logs the entry now and the exit, with its duration, on return.
+func Enter() func() {
+	if !active() || !global.verbose {
+		return noop
+	}
+	caller, start := callerInfo(2), time.Now()
+	emit(levelDebug, caller, "enter")
+	return func() {
+		if active() {
+			emit(levelDebug, caller, "exit after "+time.Since(start).Round(time.Microsecond).String())
+		}
+	}
+}
 
 // ---------- internals ----------
 
-// callerSkip is the number of stack frames between runtime.Caller and the
-// user's real call site:
-//
-//	runtime.Caller (in callerInfo)  ← skip 0
-//	callerInfo                       ← skip 1
-//	write                            ← skip 2
-//	Info/Step/QA/Trace/etc.          ← skip 3 ← what we want
-const callerSkip = 3
-
-func write(level, format string, a ...any) {
-	if global == nil || global.disabled || global.file == nil {
-		return
-	}
-	msg := fmt.Sprintf(format, a...)
-	// Caller column is fixed-width so messages align in `tail`/grep output.
-	line := fmt.Sprintf("%s [%-6s] %-44s %s\n", ts(), level, callerInfo(callerSkip), msg)
-	_, _ = global.file.WriteString(line)
+func active() bool {
+	return global != nil && !global.disabled && global.file != nil
 }
 
-func ts() string { return time.Now().Format("15:04:05.000") }
+var oneLine = strings.NewReplacer("\n", `\n`, "\r", `\r`)
+
+// emit writes one line with a single write, so that lines from concurrent runs
+// do not interleave.
+func emit(level, caller, msg string) {
+	// Caller column is fixed-width so messages align in `tail`/grep output.
+	line := fmt.Sprintf("%s %-5s [%d] %-44s %s\n",
+		time.Now().Format("2006-01-02 15:04:05.000"), level, os.Getpid(), caller, oneLine.Replace(msg))
+	_, _ = global.file.WriteString(line)
+}
 
 // callerInfo returns "<short-path>:<line> <pkg.Func>" for the call site
 // `skip` frames above this function, e.g. "pkg/ops/ops.go:42 ops.Add".
@@ -183,35 +214,6 @@ func callerInfo(skip int) string {
 	return fmt.Sprintf("%s:%d %s", file, line, fnName)
 }
 
-func (l *Logger) writeBanner(argv []string) {
-	fmt.Fprintln(l.file, strings.Repeat("=", 80))
-	fmt.Fprintf(l.file, "RUN  %s  pid=%d\n", time.Now().Format(time.RFC3339), os.Getpid())
-	fmt.Fprintf(l.file, "cmd  %s\n", strings.Join(RedactArgs(argv), " "))
-	fmt.Fprintf(l.file, "opts verbose=%v\n", l.verbose)
-	fmt.Fprintln(l.file, strings.Repeat("=", 80))
-}
-
-// RedactArgs returns argv with every --value argument replaced by
-// [redacted]. Values are never written to the banner: the INPUT line logs
-// them separately, already redacted when the key looks like a secret.
-func RedactArgs(argv []string) []string {
-	out := make([]string, len(argv))
-	copy(out, argv)
-	for i := 0; i < len(out); i++ {
-		a := out[i]
-		switch {
-		case a == "--":
-			return out
-		case a == "--value" && i+1 < len(out):
-			out[i+1] = "[redacted]"
-			i++
-		case strings.HasPrefix(a, "--value="):
-			out[i] = "--value=[redacted]"
-		}
-	}
-	return out
-}
-
 // Log rotation: when envset.log exceeds MaxLogSize at startup it becomes
 // envset.log.1 (older generations shift up; the oldest is dropped).
 const (
@@ -219,14 +221,14 @@ const (
 	LogGenerations = 3
 )
 
-func rotate(path string, maxSize int64, gens int) {
+func rotate(path string, maxSize int64, gens int) error {
 	fi, err := os.Stat(path)
 	if err != nil || fi.Size() < maxSize {
-		return
+		return nil // no log yet, or still small
 	}
 	os.Remove(fmt.Sprintf("%s.%d", path, gens))
 	for i := gens - 1; i >= 1; i-- {
-		os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1))
+		os.Rename(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("%s.%d", path, i+1)) // older ones may not exist
 	}
-	os.Rename(path, path+".1")
+	return os.Rename(path, path+".1")
 }

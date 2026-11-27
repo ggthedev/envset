@@ -34,7 +34,7 @@ type AddAnswers struct {
 // RunAddWizard prompts for the details of an add that were not preset, and
 // uses the placer to suggest the config file when no target was given.
 func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
-	logger.Step("wizard.RunAddWizard")
+	defer logger.Enter()()
 
 	ans = AddAnswers{Key: pre.Key, Value: pre.Value, Target: pre.Target}
 	if pre.Type != "" {
@@ -107,7 +107,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 			if strings.HasPrefix(varTypeStr, "q") {
 				return // Confirmed=false: caller prints "Aborted."
 			}
-			logger.QA("Var type", varTypeStr)
+			logger.Debug("answer: Var type -> %s", varTypeStr)
 
 			switch {
 			case strings.HasPrefix(varTypeStr, "export and"):
@@ -144,7 +144,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 				continue
 			}
 			ans.Key = key
-			logger.QA("Variable name", key)
+			logger.Debug("answer: variable name %q", logger.SafeKey(key))
 
 			if detector.IsSecret(key) {
 				ok, qErr := confirmSecret(key)
@@ -176,11 +176,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 				continue
 			}
 			ans.Value = value
-			displayVal := value
-			if detector.IsSecret(ans.Key) {
-				displayVal = "[redacted]"
-			}
-			logger.QA("Value", displayVal)
+			logger.Debug("answer: value %s", logger.Redacted)
 			step++
 		}
 	}
@@ -205,7 +201,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 	intent := placer.DetectIntent(key, value, varType)
 
 	// 5. Analyze placements
-	logger.Trace("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
+	logger.Debug("placer intent: category=%s scope=%s", intent.Category, intent.Scope)
 	placements := p.Analyze(intent)
 
 	// 6. Route by confidence
@@ -215,7 +211,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 	}
 
 	top := placements[0]
-	logger.Decision("top placement: %s confidence=%.0f%% reason=%q",
+	logger.Info("wizard: top placement: %s confidence=%.0f%% reason=%q",
 		top.File.Name, top.Confidence*100, top.Reason)
 
 	// 6a. Source-chain check: if any *custom* file with a matching declared
@@ -224,7 +220,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 	// gives the user a clear choice between their familiar custom file, the
 	// canonical primary file, or bailing out to fix the source-chain.
 	if broken := findBrokenRelevantCustom(placements, intent); broken != nil {
-		logger.Trace("scope mismatch detected: %s declared=%s effective=%s",
+		logger.Debug("scope mismatch detected: %s declared=%s effective=%s",
 			broken.File.Name, broken.File.Scope, broken.EffectiveScope)
 		if primary, ok := placer.PrimaryFileForScope(p.Registry, intent.Scope); ok {
 			name, qErr := placer.AskScopeMismatchResolution(*broken, *primary, intent.Scope)
@@ -232,14 +228,12 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 				err = qErr
 				return
 			}
-			logger.QA("Scope-mismatch resolution",
-				fmt.Sprintf("broken=%s primary=%s chosen=%s",
-					broken.File.Name, primary.Name, name))
+			logger.Debug("answer: Scope-mismatch resolution -> broken=%s primary=%s chosen=%s", broken.File.Name, primary.Name, name)
 			ans.Confirmed, ans.Target = true, name
 			err = preview(info, ans, pre.Quote)
 			return
 		}
-		logger.Trace("no canonical primary file found for scope %s; falling through", intent.Scope)
+		logger.Debug("no canonical primary file found for scope %s; falling through", intent.Scope)
 	}
 
 	if top.Confidence >= 0.75 {
@@ -249,18 +243,18 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 			err = qErr
 			return
 		}
-		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
+		logger.Debug("answer: Confirm placement -> use=%v target=%s", useIt, name)
 		ans.Confirmed, ans.Target = useIt, name
 	} else {
 		// Low confidence — ask clarifying questions
-		logger.Trace("top confidence below 0.75; asking clarifying questions")
+		logger.Debug("top confidence below 0.75; asking clarifying questions")
 		fmt.Fprintln(os.Stderr, "\nThe optimal location is unclear. Let me ask a few questions...")
 		refined, qErr := placer.AskUserIntent(intent)
 		if qErr != nil {
 			err = qErr
 			return
 		}
-		logger.QA("Refined intent", fmt.Sprintf("category=%s scope=%s", refined.Category, refined.Scope))
+		logger.Debug("answer: Refined intent -> category=%s scope=%s", refined.Category, refined.Scope)
 
 		// Re-analyze with refined intent
 		placements = p.Analyze(refined)
@@ -274,7 +268,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 			err = qErr
 			return
 		}
-		logger.QA("Confirm placement", fmt.Sprintf("use=%v target=%s", useIt, name))
+		logger.Debug("answer: Confirm placement -> use=%v target=%s", useIt, name)
 		ans.Confirmed, ans.Target = useIt, name
 	}
 
@@ -286,6 +280,7 @@ func RunAddWizard(pre Preset) (ans AddAnswers, err error) {
 
 // preview shows the line that is about to be written.
 func preview(info *detector.Info, ans AddAnswers, quote targets.QuoteMode) error {
+	defer logger.Enter()()
 	t, err := targets.Factory(ans.Target, info.HomeDir)
 	if err != nil {
 		return err
@@ -298,6 +293,7 @@ func preview(info *detector.Info, ans AddAnswers, quote targets.QuoteMode) error
 }
 
 func confirmSecret(key string) (bool, error) {
+	defer logger.Enter()()
 	ok := false
 	prompt := &survey.Confirm{
 		Message: fmt.Sprintf("WARNING: %s looks like a secret/API key. Continue?", key),
@@ -306,13 +302,13 @@ func confirmSecret(key string) (bool, error) {
 	if err := term.Ask(prompt, &ok); err != nil {
 		return false, err
 	}
-	logger.QA("Secret-looking key, continue?", fmt.Sprintf("%v", ok))
+	logger.Debug("answer: Secret-looking key, continue? -> %v", ok)
 	return ok, nil
 }
 
 // RunRemoveWizard interactively prompts for remove operation details.
 func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confirmed bool, err error) {
-	logger.Step("wizard.RunRemoveWizard")
+	defer logger.Enter()()
 	key, targetName, commentOut = pre.Key, pre.Target, pre.Comment
 
 	if key == "" {
@@ -323,7 +319,7 @@ func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confi
 		if err = term.Ask(keyPrompt, &key, survey.WithValidator(survey.Required)); err != nil {
 			return
 		}
-		logger.QA("Variable name to remove", key)
+		logger.Debug("answer: variable name to remove %q", logger.SafeKey(key))
 	}
 
 	if targetName == "" {
@@ -337,7 +333,7 @@ func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confi
 		if targetName, err = placer.AskTargetPick(p.Registry); err != nil {
 			return
 		}
-		logger.QA("Target file", targetName)
+		logger.Debug("answer: Target file -> %s", targetName)
 	}
 
 	if !pre.CommentSet {
@@ -349,7 +345,7 @@ func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confi
 		if err = term.Ask(commentPrompt, &commentOut); err != nil {
 			return
 		}
-		logger.QA("Comment out instead of delete?", fmt.Sprintf("%v", commentOut))
+		logger.Debug("answer: Comment out instead of delete? -> %v", commentOut)
 	}
 
 	action := "delete"
@@ -363,14 +359,14 @@ func RunRemoveWizard(pre Preset) (key, targetName string, commentOut bool, confi
 	if err = term.Ask(confirmPrompt, &confirmed); err != nil {
 		return
 	}
-	logger.QA("Confirm "+action, fmt.Sprintf("%v", confirmed))
+	logger.Debug("answer: confirm %s -> %v", action, confirmed)
 
 	return
 }
 
 // RunListWizard prompts for target to list.
 func RunListWizard() (targetName string, err error) {
-	logger.Step("wizard.RunListWizard")
+	defer logger.Enter()()
 	info, dErr := detector.Detect()
 	if dErr != nil {
 		err = dErr
@@ -381,7 +377,7 @@ func RunListWizard() (targetName string, err error) {
 	if err != nil {
 		return
 	}
-	logger.QA("Target file", targetName)
+	logger.Debug("answer: Target file -> %s", targetName)
 	return
 }
 
@@ -393,6 +389,7 @@ func RunListWizard() (targetName string, err error) {
 // a familiar destination (e.g. ~/.gg_system_exports) that *looks* correct but
 // is actually broken — silently steering them to .zshenv would be surprising.
 func findBrokenRelevantCustom(placements []placer.Placement, intent placer.Intent) *placer.Placement {
+	defer logger.Enter()()
 	if intent.Scope == placer.ScopeUnknown {
 		return nil
 	}

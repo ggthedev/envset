@@ -2,6 +2,7 @@ package placer
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 
 	"github.com/experimentalist/envset/pkg/detector"
 	"github.com/experimentalist/envset/pkg/targets"
@@ -44,6 +45,7 @@ type Placer struct {
 // registered for the user's shell (info.Shell), never the running one, so a
 // #!/bin/sh script or cron job still places into .zshenv/.bash_profile.
 func NewPlacer(info *detector.Info) *Placer {
+	defer logger.Enter()()
 	return &Placer{
 		Registry: NewRegistry(info.HomeDir, info.Shell),
 	}
@@ -65,6 +67,7 @@ func NewPlacer(info *detector.Info) *Placer {
 //     gets DuplicateLocations populated so the UI can warn even when the
 //     winning placement is an update of an existing entry.
 func (p *Placer) Analyze(intent Intent) []Placement {
+	defer logger.Enter()()
 	var placements []Placement
 
 	// 1. EXISTING KEY MATCH — highest priority
@@ -139,6 +142,7 @@ func (p *Placer) Analyze(intent Intent) []Placement {
 // file's value would be overridden by an existing definition loaded later,
 // that definition (the one shells currently use) is suggested instead.
 func (p *Placer) preferEffective(placements []Placement, defs []Definition) []Placement {
+	defer logger.Enter()()
 	if len(placements) == 0 {
 		return placements
 	}
@@ -180,6 +184,7 @@ func (p *Placer) preferEffective(placements []Placement, defs []Definition) []Pl
 
 // holdsLine reports whether the definition is already exactly the new line.
 func (p *Placer) holdsLine(d Definition, intent Intent) bool {
+	defer logger.Enter()()
 	if d.Conditional {
 		return false
 	}
@@ -195,6 +200,7 @@ func (p *Placer) holdsLine(d Definition, intent Intent) bool {
 // DuplicateLocations on a placement and applies a confidence penalty when the
 // file's effective scope does not satisfy the intent's required scope.
 func annotateForScopeAndDuplicates(pl *Placement, intent Intent, existingPaths []string) {
+	defer logger.Enter()()
 	pl.EffectiveScope = pl.File.EffectiveScope
 
 	// Duplicates: every existing location that ISN'T this file.
@@ -226,6 +232,7 @@ func annotateForScopeAndDuplicates(pl *Placement, intent Intent, existingPaths [
 
 // Top returns the highest-confidence placement.
 func (p *Placer) Top(intent Intent) *Placement {
+	defer logger.Enter()()
 	all := p.Analyze(intent)
 	if len(all) == 0 {
 		return nil
@@ -235,6 +242,7 @@ func (p *Placer) Top(intent Intent) *Placement {
 
 // matchByHeuristic applies rules to score a specific file.
 func (p *Placer) matchByHeuristic(intent Intent) Placement {
+	defer logger.Enter()()
 	var best ConfigFile
 	var score float64
 	var reason string
@@ -320,6 +328,7 @@ var scopeFallbacks = map[Scope][]Scope{
 // pickBestInScope selects the best file for a scope, falling back to the
 // closest scope the shell has a file for.
 func (p *Placer) pickBestInScope(scope Scope) ConfigFile {
+	defer logger.Enter()()
 	for _, s := range scopeFallbacks[scope] {
 		var best *ConfigFile
 		for i := range p.Registry.Files {
@@ -342,6 +351,7 @@ func (p *Placer) pickBestInScope(scope Scope) ConfigFile {
 }
 
 func (p *Placer) contains(placements []Placement, name string) bool {
+	defer logger.Enter()()
 	for _, pl := range placements {
 		if pl.File.Name == name {
 			return true
@@ -351,6 +361,7 @@ func (p *Placer) contains(placements []Placement, name string) bool {
 }
 
 func sortPlacements(placements []Placement) []Placement {
+	defer logger.Enter()()
 	// Simple bubble sort — fine for small N
 	n := len(placements)
 	for i := 0; i < n; i++ {

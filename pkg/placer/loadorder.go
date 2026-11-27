@@ -2,6 +2,7 @@ package placer
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"math"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ type Definition struct {
 // its last definition. Commented-out lines do not count. PATH is additive
 // ("another entry", never "the existing value"), so it has none.
 func (r *Registry) Definitions(key string) []Definition {
+	defer logger.Enter()()
 	if key == "" || key == "PATH" {
 		return nil
 	}
@@ -63,6 +65,7 @@ type loadPos struct {
 // rootRank is the order in which the shell itself reads a startup file.
 // ok is false for files the shell only reaches through `source`.
 func rootRank(f ConfigFile) (rank int, ok bool) {
+	defer logger.Enter()()
 	switch f.Name {
 	case "launchd": // session environment, in place before any shell starts
 		return 0, true
@@ -78,6 +81,7 @@ func rootRank(f ConfigFile) (rank int, ok bool) {
 
 // positions returns every way the shell reaches line `line` of f.
 func (r *Registry) positions(f ConfigFile, line int, visited map[string]bool) []loadPos {
+	defer logger.Enter()()
 	if visited[f.Path] {
 		return nil
 	}
@@ -105,6 +109,7 @@ func (r *Registry) positions(f ConfigFile, line int, visited map[string]bool) []
 // shellReads reports whether the shell loads this primary file on its own.
 // bash login shells read only the first of .bash_profile, .bash_login, .profile.
 func (r *Registry) shellReads(f ConfigFile) bool {
+	defer logger.Enter()()
 	if f.Name != "profile" {
 		return true
 	}
@@ -121,6 +126,7 @@ func (r *Registry) shellReads(f ConfigFile) bool {
 // .bashrc but not both (unless one sources the other, which shows up as a
 // shared root); launchd values are inherited by every shell.
 func sameShell(a, b ConfigFile) bool {
+	defer logger.Enter()()
 	if a.Path == b.Path || a.Name == "launchd" || b.Name == "launchd" {
 		return true
 	}
@@ -129,6 +135,7 @@ func sameShell(a, b ConfigFile) bool {
 
 // narrower returns whichever scope reaches fewer shells.
 func narrower(a, b Scope) Scope {
+	defer logger.Enter()()
 	if a == ScopeSession {
 		return b
 	}
@@ -151,6 +158,7 @@ const (
 // targetLine is 0) to another definition. For OtherWins, shells names the
 // shells in which the other value is the one used.
 func (r *Registry) Compare(target ConfigFile, targetLine int, other Definition) (rel Relation, shells Scope) {
+	defer logger.Enter()()
 	if targetLine == 0 {
 		targetLine = math.MaxInt
 	}
@@ -173,6 +181,7 @@ func (r *Registry) Compare(target ConfigFile, targetLine int, other Definition) 
 // DuplicateNotes explains, in user terms, how writing key to target interacts
 // with the definitions of key in other files.
 func (r *Registry) DuplicateNotes(target ConfigFile, key string) []string {
+	defer logger.Enter()()
 	defs := r.Definitions(key)
 	targetLine := 0
 	for _, d := range defs {
@@ -205,6 +214,7 @@ func (r *Registry) DuplicateNotes(target ConfigFile, key string) []string {
 }
 
 func shellsPhrase(s Scope) string {
+	defer logger.Enter()()
 	switch s {
 	case ScopeLogin:
 		return "login shells"
@@ -218,6 +228,7 @@ func shellsPhrase(s Scope) string {
 // in load order. Files they source are not listed: sourcing the parent loads
 // them. launchd.sh is never included (it is not shell startup).
 func (r *Registry) StartupFiles() []string {
+	defer logger.Enter()()
 	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
 	in := func(rel string) string { return filepath.Join(r.Home, rel) }
 

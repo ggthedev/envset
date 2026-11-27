@@ -2,6 +2,7 @@ package targets
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"strconv"
 	"strings"
 )
@@ -91,6 +92,7 @@ func (s *scanner) depth() int {
 
 // scanShell returns one lineInfo per line. shell is zsh, bash, sh or fish.
 func scanShell(lines []string, shell string) []lineInfo {
+	defer logger.Enter()()
 	s := &scanner{shell: shell, fish: shell == "fish", cmdPos: true}
 	out := make([]lineInfo, len(lines))
 	for i, raw := range lines {
@@ -109,6 +111,11 @@ func scanShell(lines []string, shell string) []lineInfo {
 			continue
 		}
 		out[i] = s.line(line)
+	}
+	if logger.Verbose() { // line numbers and state only, never contents
+		for i, in := range out {
+			logger.Debug("scan line %d: depth=%d inert=%v continued=%v open=%v", i+1, in.Depth, in.Inert, in.Continued, in.Open)
+		}
 	}
 	return out
 }
@@ -427,6 +434,7 @@ func (s *scanner) keyword(w string) {
 
 // heredocStart records the delimiter after "<<" and returns the index after it.
 func (s *scanner) heredocStart(line string, i int) int {
+	defer logger.Enter()()
 	d := heredoc{}
 	if i < len(line) && line[i] == '-' {
 		d.stripTabs = true
@@ -466,6 +474,7 @@ func (s *scanner) heredocStart(line string, i int) int {
 
 // entries parses every line and marks where each one sits.
 func (s *ShellTarget) entries(lines []string) []Entry {
+	defer logger.Enter()()
 	infos := scanShell(lines, s.shell)
 	out := make([]Entry, len(lines))
 	for i, line := range lines {

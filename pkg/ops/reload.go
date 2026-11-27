@@ -2,6 +2,7 @@ package ops
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"io"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 // PrintReloadHint prints a human-friendly hint to stderr after a write,
 // telling the user how to apply the changes in the current shell.
 func PrintReloadHint(path, targetName string) {
+	defer logger.Enter()()
 	if strings.HasSuffix(path, "launchd.sh") {
 		fmt.Fprintln(os.Stderr, "\nApplied to this login session; GUI apps launched from now on will see it.")
 		return
@@ -25,6 +27,7 @@ func PrintReloadHint(path, targetName string) {
 // shellQuote single-quotes s if it contains anything a shell would split or
 // expand, leaving a leading ~/ outside the quotes so it still expands.
 func shellQuote(s string) string {
+	defer logger.Enter()()
 	if s == "" || strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./~") == "" {
 		return s
 	}
@@ -38,5 +41,6 @@ func shellQuote(s string) string {
 // `eval "$(envset add ... --print-source)"`. All other output should already
 // be going to stderr at this point.
 func PrintSourceCommand(out io.Writer, path string) {
+	defer logger.Enter()()
 	fmt.Fprintf(out, "source %s\n", shellQuote(path))
 }

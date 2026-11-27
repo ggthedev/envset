@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -22,6 +23,7 @@ var LockTimeout = 20 * time.Second
 // symlink and its target share it. It is released if the process dies. It
 // coordinates envset processes only; editors do not take it.
 func Lock(path string) (unlock func(), err error) {
+	defer logger.Enter()()
 	real, err := canonicalPath(path)
 	if err != nil {
 		return nil, err
@@ -39,10 +41,12 @@ func Lock(path string) (unlock func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
-	deadline := time.Now().Add(LockTimeout)
+	start := time.Now()
+	deadline := start.Add(LockTimeout)
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
+			logger.Debug("locked %s after %s (%s)", real, time.Since(start).Round(time.Millisecond), name)
 			return func() { f.Close() }, nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {

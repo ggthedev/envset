@@ -1,6 +1,7 @@
 package placer
 
 import (
+	"github.com/experimentalist/envset/pkg/logger"
 	"strings"
 
 	"github.com/experimentalist/envset/pkg/targets"
@@ -45,6 +46,7 @@ type Intent struct {
 
 // DetectIntent infers category and tentative scope from the variable.
 func DetectIntent(key, value string, varType targets.VarType) Intent {
+	defer logger.Enter()()
 	intent := Intent{
 		Key:     key,
 		Value:   value,
@@ -82,6 +84,7 @@ func DetectIntent(key, value string, varType targets.VarType) Intent {
 }
 
 func classifyExport(key, value string, intent Intent) Intent {
+	defer logger.Enter()()
 	lower := lowerKey(key)
 
 	// PATH variables
@@ -146,13 +149,23 @@ func classifyExport(key, value string, intent Intent) Intent {
 	return intent
 }
 
-func lowerKey(s string) string { return strings.ToLower(s) }
+func lowerKey(s string) string {
+	defer logger.Enter()()
+	return strings.ToLower(s)
+}
 
-func contains(s, substr string) bool   { return strings.Contains(s, substr) }
-func startsWith(s, prefix string) bool { return strings.HasPrefix(s, prefix) }
+func contains(s, substr string) bool {
+	defer logger.Enter()()
+	return strings.Contains(s, substr)
+}
+func startsWith(s, prefix string) bool {
+	defer logger.Enter()()
+	return strings.HasPrefix(s, prefix)
+}
 
 // isSecret checks if a key looks like a secret/API key.
 func isSecret(key string) bool {
+	defer logger.Enter()()
 	lower := strings.ToLower(key)
 	patterns := []string{
 		"secret", "token", "password", "passwd", "api_key", "apikey",

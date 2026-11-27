@@ -288,16 +288,38 @@ login. It also applies the change to the current login session right away.
 
 ## Logging
 
-Every run is recorded in `~/.config/envset/logs/envset.log`: the command, the
-inputs, the placement decision and the result. `-v/--verbose` adds a per-step
-trace.
+Every run is logged to `~/.config/envset/logs/envset.log`, one line per event
+with date, time, level, process id and the place in the code:
 
-- **No secrets.** `--value` arguments are never written in the command line
-  that heads each run. In the inputs line, the values of secret-looking keys
-  (`*_TOKEN`, `*_KEY`, `PASSWORD`, …) are shown as `[redacted]`.
+```
+2026-11-28 09:12:03.114 INFO  [4812] pkg/ops/ops.go:168 ops.Add   add: appended EDITOR in /Users/you/.zshrc
+```
+
+| Level | Written | What |
+|---|---|---|
+| `ERROR` | always | failures and refusals |
+| `WARN` | always | duplicate definitions, scope mismatches, a skipped syntax check, `launchctl` failures |
+| `INFO` | always | start of the run (version and command), placement, each change, every backup path, exit code and duration |
+| `DEBUG` | with `-v` | every function entered and left, inputs, decisions, wizard answers, file reads, locks and writes |
+
+`-v/--verbose` writes only to the log and prints its path on stderr; follow it
+with `tail -f`. It is large: one command on a 150-line file writes around 2,000
+lines (about 200 KB).
+
+```bash
+grep -E ' (ERROR|WARN) ' ~/.config/envset/logs/envset.log     # problems only
+grep '\[4812\]' ~/.config/envset/logs/envset.log               # one run
+```
+
+- **No values.** Values, lines from your files, init commands, command output
+  and unrecognised arguments are never written, at any level. Variable names,
+  file paths, `--target`, `--type` and `--shell` are. A name that is not a valid
+  variable name is logged as `[invalid]`. The terminal still shows the full
+  error.
 - **Private.** The log and its folder are readable only by you (modes 0600 and 0700).
-- **Bounded.** Once the log passes 5 MB it is rotated to `envset.log.1`; three
-  old copies are kept.
+- **Bounded.** A log over 5 MB is rotated to `envset.log.1` when the next run
+  starts; three old copies are kept.
+- Logs written by earlier versions are not rewritten, and may hold values.
 
 The log location is the first of these that is set:
 1. `$ENVSET_LOG_FILE`
@@ -343,7 +365,7 @@ envset/
 │   ├── audit/        health checks and --fix
 │   ├── rules/        built-in and user-acknowledged audit rules (~/.config/envset/*.json)
 │   ├── lazy/         lazy-load wrapper generator
-│   ├── logger/       run log
+│   ├── logger/       leveled run log and call tracing
 │   ├── paths/        where envset's own files live
 │   ├── wizard/       interactive prompts
 │   ├── term/         TTY detection; prompts on stderr

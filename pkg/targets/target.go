@@ -2,6 +2,7 @@ package targets
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -92,6 +93,7 @@ type Target interface {
 
 // Factory returns a Target by name.
 func Factory(name string, home string) (Target, error) {
+	defer logger.Enter()()
 	switch name {
 	case "zshrc", "bashrc", "bash_profile", "zprofile", "profile", "zshenv", "bash_login", "config_fish", "gg_system_exports", "gg_system_interactive":
 		return NewShellTarget(name, home)
@@ -122,6 +124,7 @@ func Factory(name string, home string) (Target, error) {
 
 // AllShellTargets returns all supported shell target names.
 func AllShellTargets() []string {
+	defer logger.Enter()()
 	return []string{
 		"zshrc", "bashrc", "bash_profile", "zprofile", "profile", "zshenv", "bash_login", "config_fish",
 	}
@@ -129,6 +132,7 @@ func AllShellTargets() []string {
 
 // VarTypeFromString parses a var type from string.
 func VarTypeFromString(s string) (VarType, error) {
+	defer logger.Enter()()
 	switch s {
 	case "export", "":
 		return VarTypeExport, nil
@@ -151,6 +155,7 @@ func VarTypeFromString(s string) (VarType, error) {
 
 // VarTypeDescription returns a human-readable description.
 func VarTypeDescription(vt VarType) string {
+	defer logger.Enter()()
 	switch vt {
 	case VarTypeExport:
 		return "export FOO=bar"
@@ -180,4 +185,7 @@ var definitionRe = regexp.MustCompile(
 		`(?:(?:export|source|eval|alias|setenv)\s+\S|set\s+-[a-zA-Z]+\s|\.\s+\S|launchctl\s+setenv\s|[A-Za-z_][A-Za-z0-9_]*\+?=)`)
 
 // IsDefinitionLine reports whether a config line defines or loads something.
-func IsDefinitionLine(line string) bool { return definitionRe.MatchString(line) }
+func IsDefinitionLine(line string) bool {
+	defer logger.Enter()()
+	return definitionRe.MatchString(line)
+}

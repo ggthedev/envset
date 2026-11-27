@@ -2,6 +2,7 @@ package audit
 
 import (
 	"fmt"
+	"github.com/experimentalist/envset/pkg/logger"
 	"io"
 	"os"
 	"sort"
@@ -14,6 +15,7 @@ import (
 // a separate "User-confirmed exceptions" section after the active findings,
 // so impact stays visible without blocking the actionable list.
 func PrintReport(w io.Writer, r Report) {
+	defer logger.Enter()()
 	useColor := isTerminal(w)
 
 	if len(r.Findings) == 0 {
@@ -76,6 +78,7 @@ func PrintReport(w io.Writer, r Report) {
 }
 
 func printFinding(w io.Writer, useColor bool, idx int, f Finding, acked bool) {
+	defer logger.Enter()()
 	label := severityLabel(f.Severity, useColor)
 	tag := ""
 	if acked {
@@ -118,6 +121,7 @@ const (
 )
 
 func color(enabled bool, c, s string) string {
+	defer logger.Enter()()
 	if !enabled {
 		return s
 	}
@@ -125,6 +129,7 @@ func color(enabled bool, c, s string) string {
 }
 
 func severityLabel(sv Severity, useColor bool) string {
+	defer logger.Enter()()
 	switch sv {
 	case SevError:
 		return color(useColor, colorRed, "ERROR  ")
@@ -136,6 +141,7 @@ func severityLabel(sv Severity, useColor bool) string {
 }
 
 func severityRank(sv Severity) int {
+	defer logger.Enter()()
 	switch sv {
 	case SevError:
 		return 0
@@ -147,6 +153,7 @@ func severityRank(sv Severity) int {
 }
 
 func isTerminal(w io.Writer) bool {
+	defer logger.Enter()()
 	f, ok := w.(*os.File)
 	if !ok {
 		return false

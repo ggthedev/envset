@@ -1,5 +1,7 @@
 package rules
 
+import "github.com/experimentalist/envset/pkg/logger"
+
 // Check IDs — keep in sync with the emitters in pkg/audit/audit.go.
 const (
 	CheckBrokenPath          = "broken-path"
@@ -15,6 +17,7 @@ const (
 // On first run (and on version upgrade), this is serialised to ideals.json
 // so users can read the policy the auditor enforces.
 func BuiltinIdeals(envsetVersion string) Ideals {
+	defer logger.Enter()()
 	return Ideals{
 		Version:     CurrentVersion,
 		GeneratedBy: "envset " + envsetVersion,
@@ -74,6 +77,7 @@ func BuiltinIdeals(envsetVersion string) Ideals {
 
 // FindCheck returns the IdealCheck with the given id, or nil.
 func (i Ideals) FindCheck(id string) *IdealCheck {
+	defer logger.Enter()()
 	for k := range i.Checks {
 		if i.Checks[k].ID == id {
 			return &i.Checks[k]

@@ -161,33 +161,114 @@ func TestShellFlag(t *testing.T) {
 	}
 }
 
-func TestSecretsNeverReachTheLog(t *testing.T) {
-	home := t.TempDir()
-	run(t, home, "-v", "add", "--key", "GITHUB_TOKEN", "--value", "ghp_e2e_secret", "--target", "zshenv", "--dry-run")
-	run(t, home, "add", "--key", "MY_API_KEY", "--value=sk_e2e_secret", "--target", "zshenv", "--dry-run")
-	// Even a non-secret-looking key never has its value in the cmd banner.
-	run(t, home, "add", "--key", "PLAIN", "--value", "banner_e2e_value", "--target", "zshenv", "--dry-run")
+// Nothing typed as a value, and no line of the user's files, may reach the
+// log at any level: every argument and file line below holds the canary.
+func TestValuesNeverReachTheLog(t *testing.T) {
+	const canary = "zzCANARYzz"
+	for _, verbose := range []bool{false, true} {
+		home := t.TempDir()
+		rc := filepath.Join(home, ".zshrc")
+		os.WriteFile(rc, []byte("compinit # "+canary+"\ncompinit # "+canary+"\n"+
+			"export PATH=$PATH:/"+canary+" :/x\n"+
+			"if true; then\n  export INBLOCK="+canary+"\nfi\n"+
+			"export OPENAI_KEY="+canary+"\n"+
+			"eval \"$("+canary+" init zsh)\"\n"), 0o644)
 
-	logDir := filepath.Join(home, "logs")
-	entries, err := os.ReadDir(logDir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("no log written: %v", err)
+		exec := func(args ...string) result {
+			if verbose {
+				args = append([]string{"-v"}, args...)
+			}
+			return run(t, home, args...)
+		}
+		for _, args := range [][]string{
+			{"add", "--key", "PLAIN", "--value", canary, "--target", "zshrc"},
+			{"add", "--key", "PLAIN", "--value=" + canary + "2", "--target", "zshrc"},
+			{"add", "--key", "PLAIN", "--value", canary, "--yes", "--dry-run"},
+			{"add", "--key", "GITHUB_TOKEN", "--value", canary, "--literal", "--target", "zshenv"},
+			{"add", "--key", "DB", "--value", canary, "--target", "launchd", "--dry-run"},
+			{"add", "--type", "path_append", "--value", "/" + canary, "--target", "zshenv"},
+			{"add", "--key", "K=" + canary, "--value", "x", "--target", "zshrc"},
+			{"add", "--key", "K=" + canary, "--value", "x", "--yes"},
+			{"add", "--key", "BAD", "--value", "$(" + canary + ")", "--target", "zshrc"},
+			// Types that do not use the key do not validate it either.
+			{"add", "--type", "eval", "--key", "K=" + canary, "--value", "x", "--target", "zshrc"},
+			{"add", "--type", "source", "--key", "K=" + canary, "--value", "/x", "--target", "zshrc"},
+			{"add", "--type", "eval", "--key", "K=" + canary, "--value", "x", "--target", "zshrc"},
+			{"add", "--type", "source", "--key", "K=" + canary, "--value", "/y", "--yes"},
+			{"add", "--key", "BAD", "--value", "\"" + canary, "--raw", "--target", "zshrc"}, // would not parse
+			{"add", "--key", "INBLOCK", "--value", canary, "--target", "zshrc"},             // refused
+			{"add", canary, canary},
+			{"add", "--" + canary},
+			{"add", "-kK=" + canary}, // a valid name would be logged: names are not values
+			{canary},
+			{"remove", "--key", "PLAIN", "--value", canary + "-absent", "--target", "zshrc"},
+			{"remove", "--key", "K=" + canary, "--target", "zshrc"},
+			{"remove", "--key", "INBLOCK", "--target", "zshrc"},
+			{"remove", "--key", "PLAIN", "--target", "zshrc"},
+			{"list", "--target", "zshrc"},
+			{"list", "--key", "K=" + canary, "--target", "zshrc"},
+			{"lazy", "pyenv", "--init-cmd", canary + " init", "--write"},
+			{"lazy", "x;" + canary},
+			{"audit"},
+			{"audit", "--dry-run"},
+			{"audit", "--fix", "--yes"},
+			{"restore", "--target", "zshrc", "--list"},
+			{"restore", "--target", "zshrc"},
+			{"reload"},
+			{"detect"},
+		} {
+			exec(args...)
+		}
+
+		logPath := filepath.Join(home, "logs", "envset.log")
+		b, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		log := string(b)
+		for _, ln := range strings.Split(log, "\n") {
+			if strings.Contains(ln, canary) {
+				t.Errorf("verbose=%v: leaked: %s", verbose, ln)
+			}
+		}
+		// The default log says what happened and where the backups are.
+		for _, want := range []string{" INFO ", " ERROR ", "backup saved: ", "end exit=1", "end exit=0"} {
+			if !strings.Contains(log, want) {
+				t.Errorf("verbose=%v: log lacks %q", verbose, want)
+			}
+		}
+		if got := strings.Contains(log, " DEBUG "); got != verbose {
+			t.Errorf("verbose=%v: DEBUG lines present = %v", verbose, got)
+		}
+		if fi, _ := os.Stat(logPath); fi.Mode().Perm() != 0o600 {
+			t.Errorf("log mode %v, want 0600", fi.Mode().Perm())
+		}
 	}
-	for _, e := range entries {
-		p := filepath.Join(logDir, e.Name())
-		b, _ := os.ReadFile(p)
-		for _, secret := range []string{"ghp_e2e_secret", "sk_e2e_secret"} {
-			if strings.Contains(string(b), secret) {
-				t.Errorf("%s leaked into %s", secret, e.Name())
-			}
-		}
-		for _, ln := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(ln, "cmd ") && strings.Contains(ln, "banner_e2e_value") {
-				t.Errorf("value in cmd banner: %s", ln)
-			}
-		}
-		if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
-			t.Errorf("%s mode %v, want 0600", e.Name(), fi.Mode().Perm())
+}
+
+// The terminal still gets the detail that the log leaves out.
+func TestTerminalKeepsDetailTheLogOmits(t *testing.T) {
+	home := t.TempDir()
+	r := run(t, home, "add", "--key", "K=oops", "--value", "x", "--target", "zshrc")
+	if r.code == 0 || !strings.Contains(r.stderr, `"K=oops"`) {
+		t.Fatalf("code=%d stderr=%q", r.code, r.stderr)
+	}
+}
+
+// -v traces calls into the log and leaves stdout alone.
+func TestVerboseTracesCallsAndKeepsStdoutClean(t *testing.T) {
+	home := t.TempDir()
+	r := run(t, home, "-v", "add", "--key", "FOO", "--value", "bar", "--target", "zshenv", "--print-source")
+	if want := "source " + filepath.Join(home, ".zshenv") + "\n"; r.stdout != want {
+		t.Fatalf("stdout = %q, want %q", r.stdout, want)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, "logs", "envset.log"))
+	for _, want := range []string{
+		"ops.Add", "targets.(*ShellTarget).Add", "fsutil.Lock", "targets.CommitFile",
+		"fsutil.WriteFileAtomic", " enter", " exit after ", "syntax check with ", "atomic write: ",
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("verbose log lacks %q", want)
 		}
 	}
 }
