@@ -75,11 +75,10 @@ The version comes from the newest `v*` git tag:
 
 A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <file>` clears that.
 
-Once the repo is pushed to GitHub you can install or upgrade on any Mac with:
+With Go installed, you can also install or upgrade on any Mac without cloning:
 
 ```bash
 go install github.com/ggthedev/envset@latest
-# for a private repo, first:  go env -w GOPRIVATE=github.com/ggthedev/*
 ```
 
 Every pull request merged into `main` publishes a
