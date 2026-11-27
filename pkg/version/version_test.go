@@ -15,7 +15,7 @@ func TestResolve(t *testing.T) {
 		info *debug.BuildInfo
 		want string
 	}{
-		{"develop@abc1234", tagged, "develop@abc1234"},
+		{"v0.1.0-3-gabc1234", tagged, "v0.1.0-3-gabc1234"},
 		{"", tagged, "v0.1.0"},
 		{"", vcs, "devel-0123456+modified"},
 		{"", &debug.BuildInfo{}, "devel"},

@@ -9,7 +9,7 @@ import (
 )
 
 // Version is set at build time by the Makefile and scripts/build-branches.sh with
-// -ldflags "-X github.com/ggthedev/envset/pkg/version.Version=<branch>@<commit>".
+// -ldflags "-X github.com/ggthedev/envset/pkg/version.Version=<git describe>".
 var Version = ""
 
 // String is the build's version: the value set at build time, else the module

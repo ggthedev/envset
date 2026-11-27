@@ -62,10 +62,16 @@ To build committed branches instead, side by side, whatever is checked out:
 scripts/build-branches.sh develop                 # output/envset-dev
 MACS=1 scripts/build-branches.sh develop          # Intel and Apple Silicon binaries
 INSTALL=1 scripts/build-branches.sh develop       # also refresh output/envset
-envset version                                    # shows branch@commit and platform
+envset version                                    # shows the version and platform
 ```
 
-`make build` adds `+modified` to the version when there were uncommitted changes.
+The version comes from the newest `v*` git tag:
+
+| Version | Built from |
+|---|---|
+| `v0.1.0` | the tagged commit |
+| `v0.1.0-3-gabc1234` | 3 commits after the tag, at commit `abc1234` |
+| `…-dirty` | `make build` with uncommitted changes |
 
 A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <file>` clears that.
 

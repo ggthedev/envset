@@ -4,11 +4,13 @@
 
 OUT    := output
 PKG    := github.com/ggthedev/envset
-REV    := $(shell git rev-parse --short HEAD 2>/dev/null)
-BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
-DIRTY  := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo +modified)
+# The newest version tag (v0.1.0), with commits since it and their hash when
+# HEAD is past the tag (v0.1.0-3-gabc1234); just the hash if there is no tag.
+TAG   := $(shell git describe --tags --match 'v[0-9]*' --always 2>/dev/null)
+# git describe --dirty would miss new files, which are compiled too.
+DIRTY := $(shell test -z "$$(git status --porcelain 2>/dev/null)" || echo -dirty)
 # Empty outside a git checkout: envset then reports what Go recorded.
-VERSION := $(if $(REV),$(BRANCH)@$(REV)$(DIRTY))
+VERSION := $(if $(TAG),$(TAG)$(DIRTY))
 
 GOBUILD = CGO_ENABLED=0 go build -trimpath -ldflags "-X $(PKG)/pkg/version.Version=$(VERSION)"
 
