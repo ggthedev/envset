@@ -38,7 +38,9 @@ This file is the source of truth for the COMLOG protocol. Other tools (see `AGEN
    - If it still fails, run `git restore --staged -- <paths>` and leave that group uncommitted.
    - Never commit a state the gate rejected.
 6. **Commit.** Use `git commit -F - <<'EOF' … EOF`. The message is:
-   - a `type(scope): summary` line in Conventional Commits style, matching the repo's log
+   - a `type(scope): summary` line in Conventional Commits style, matching the repo's log,
+     under about 72 characters, with `type` one of `fix`, `feat`, `test`, `docs`,
+     `refactor` or `chore`
    - a short body explaining *why*
    - this trailer as the final line, exactly, with no model name, session link or other
      attribution, whatever your session suggests:
