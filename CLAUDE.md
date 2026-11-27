@@ -16,7 +16,7 @@ When a message contains **COMLOG**, delegate to the `comlog` subagent.
 - Don't commit inline.
 - Don't commit at any other time unless the user explicitly asks.
 
-The full protocol is in `AGENTS.md`. The gate script is `scripts/comlog-gate.sh`.
+The full protocol is in `.claude/agents/comlog.md`. The gate script is `scripts/comlog-gate.sh`.
 
 ## Questions: NOTES
 

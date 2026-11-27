@@ -315,7 +315,7 @@ go build ./... && go vet ./... && go test ./...
 The tests never touch your real files. Backups go to a temp directory, and
 `launchctl` is replaced by a fake.
 
-Commits in this repo go through the **COMLOG** protocol (see `AGENTS.md`).
+Commits in this repo go through the **COMLOG** protocol (see `.claude/agents/comlog.md`).
 `scripts/comlog-gate.sh` checks the staged tree: no binaries or secrets, and
 build, vet and tests pass, with no new test failures compared with HEAD.
 

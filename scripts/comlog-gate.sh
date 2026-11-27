@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # comlog-gate.sh — verify that what is currently STAGED is safe to commit.
 #
-# Used by the COMLOG protocol (see AGENTS.md). Run it after staging a group of
+# Used by the COMLOG protocol (see .claude/agents/comlog.md). Run it after staging a group of
 # changes and before `git commit`. It never modifies the working tree or index:
 # the staged tree and HEAD are exported to temp dirs and tested there.
 #
