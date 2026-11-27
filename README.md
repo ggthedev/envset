@@ -416,3 +416,7 @@ envset/
 Copyright 2026 Gaurav Gupta. Licensed under the Apache License, Version 2.0: see
 [LICENSE](LICENSE). You may use, change and share this code; keep the copyright
 and [NOTICE](NOTICE) text, and mark the files you change.
+
+The binaries also contain third-party code, whose licences are in
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt). After changing dependencies,
+regenerate it with `scripts/third-party-notices.sh`.
