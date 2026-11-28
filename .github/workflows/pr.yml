@@ -1,0 +1,64 @@
+# Run by hand to open the pull request from develop into main, with a title and
+# description written from the commits. Run it again to refresh them after more
+# commits (this replaces edits made by hand). Merging stays a manual step.
+#
+# Needs: Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests". GitHub holds the test workflow of a pull request made
+# this way until someone selects "Approve workflows to run" on it.
+name: pull request
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: Title (leave empty to write one from the commits)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pull-request
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  open:
+    runs-on: macos-latest # the tools pr-text.sh is tried with
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: develop
+          fetch-depth: 0 # both branches and all tags
+
+      - name: Open or update the pull request
+        env:
+          TITLE: ${{ inputs.title }} # never pasted into the script itself
+        run: |
+          text=$(mktemp)
+          body=$(mktemp)
+          scripts/pr-text.sh origin/main origin/develop >"$text"
+          if [ ! -s "$text" ]; then
+            echo "Nothing to merge: develop has no commits that main lacks." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          title=${TITLE:-$(head -n 1 "$text")}
+          tail -n +3 "$text" >"$body"
+
+          number=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            url=$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$number" \
+              -f title="$title" -F body=@"$body" --jq .html_url)
+            done_what=Updated
+          else
+            url=$(gh pr create --base main --head develop --title "$title" --body-file "$body")
+            done_what=Opened
+          fi
+          echo "$done_what $url" | tee -a "$GITHUB_STEP_SUMMARY"
