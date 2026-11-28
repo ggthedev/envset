@@ -88,6 +88,35 @@ The version comes from the newest `v*` git tag:
 
 A binary copied to another Mac may be blocked; `xattr -d com.apple.quarantine <file>` clears that.
 
+## Pull requests
+
+`.github/workflows/pr.yml` opens the pull request from `develop` into `main`,
+with a title and description written from the commit messages: what each commit
+changes and why, whether merging publishes a release, and the files changed.
+Run it after pushing `develop`, from the Actions tab (**pull request** > **Run
+workflow**) or with:
+
+```bash
+gh workflow run pr.yml
+gh workflow run pr.yml -f title="My own title"
+```
+
+Then review and merge it yourself. Running it again refreshes the title and
+description of the open pull request, replacing edits made by hand. To preview
+the text first:
+
+```bash
+git fetch origin && scripts/pr-text.sh origin/main origin/develop
+```
+
+- The repository setting **Settings > Actions > General > Allow GitHub Actions
+  to create and approve pull requests** must be on.
+- GitHub holds the tests of a pull request opened this way until you select
+  **Approve workflows to run** on it.
+- GitHub offers **Run workflow** only once the file is on `main`.
+
+The title also appears in the generated release notes.
+
 ## Releases
 
 A pull request merged into `main` publishes a
@@ -100,7 +129,8 @@ Each release holds Intel (`darwin_amd64`) and Apple Silicon (`darwin_arm64`)
 archives, checksums and generated notes. The patch number goes up each time;
 label the pull request `release:minor` to raise the minor number instead (this
 also releases when nothing in the download changed). The workflow is
-`.github/workflows/release.yml`.
+`.github/workflows/release.yml`, and `scripts/release-version.sh` holds the rule
+that it shares with the pull request description.
 
 After changing dependencies, regenerate the licence notices with
 `scripts/third-party-notices.sh`.
@@ -130,7 +160,8 @@ envset/
 │   ├── term/         TTY detection; prompts on stderr
 │   ├── version/      which build is running
 │   └── ops/          orchestration behind each command
-├── scripts/          commit gate, per-branch builds, licence notices
+├── scripts/          commit gate, builds and installs, pull request text, release
+│                     versions, licence notices
 ├── Makefile          make help | build | clear
 └── docs/             tutorial, reference, logging, development, deferred work
 ```
