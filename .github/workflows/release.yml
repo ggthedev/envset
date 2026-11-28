@@ -1,9 +1,11 @@
-# Every pull request merged into main becomes a release: test, tag, build the
-# Intel and Apple Silicon binaries, and publish them with generated notes.
+# A pull request merged into main becomes a release when something in the
+# download changed since the last one: test, tag, build the Intel and Apple
+# Silicon binaries, and publish them with generated notes. Merges that only
+# touch documentation or repository settings publish nothing.
 #
 # The version is the newest v* tag with its patch number raised by one, or the
-# minor number if the pull request has the label "release:minor". The first
-# release is v0.1.0.
+# minor number if the pull request has the label "release:minor" (which also
+# forces a release). The first release is v0.1.0.
 name: release
 
 # A push, not a pull_request event: the token of a pull request from a fork
@@ -54,20 +56,41 @@ jobs:
         with:
           fetch-depth: 0 # all tags, to find the newest version
 
-      - uses: actions/setup-go@v7
+      - name: Check that the download changed
         if: steps.pr.outputs.merged == 'true'
+        id: changes
+        env:
+          BUMP: ${{ steps.pr.outputs.bump }}
+        run: |
+          releases() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; }
+          # A commit that already has a version is a re-run: carry on.
+          tagged=$(git tag --points-at HEAD | releases)
+          latest=$(git tag --sort=-v:refname | releases | sed -n 1p)
+          if [ -z "$tagged" ] && [ -n "$latest" ] && [ "$BUMP" != minor ]; then
+            # Everything that ends up in the archives, or decides how it is built.
+            changed=$(git diff --name-only "$latest" HEAD -- \
+              '*.go' go.mod go.sum Makefile LICENSE NOTICE THIRD_PARTY_NOTICES.txt ':(exclude)*_test.go')
+            if [ -z "$changed" ]; then
+              echo "Nothing in the download changed since $latest: nothing to release."
+              exit 0
+            fi
+          fi
+          echo "release=true" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v7
+        if: steps.changes.outputs.release == 'true'
         with:
           go-version: stable
 
       - name: Test
-        if: steps.pr.outputs.merged == 'true'
+        if: steps.changes.outputs.release == 'true'
         run: |
           go build ./...
           go vet ./...
           go test ./...
 
       - name: Tag the next version
-        if: steps.pr.outputs.merged == 'true'
+        if: steps.changes.outputs.release == 'true'
         id: version
         env:
           BUMP: ${{ steps.pr.outputs.bump }}
@@ -94,7 +117,7 @@ jobs:
           echo "Releasing $version"
 
       - name: Build
-        if: steps.pr.outputs.merged == 'true'
+        if: steps.changes.outputs.release == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -113,7 +136,7 @@ jobs:
           (cd dist && shasum -a 256 *.tar.gz >checksums.txt)
 
       - name: Publish the release
-        if: steps.pr.outputs.merged == 'true'
+        if: steps.changes.outputs.release == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
