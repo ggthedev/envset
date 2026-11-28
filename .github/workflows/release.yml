@@ -62,20 +62,13 @@ jobs:
         env:
           BUMP: ${{ steps.pr.outputs.bump }}
         run: |
-          releases() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; }
-          # A commit that already has a version is a re-run: carry on.
-          tagged=$(git tag --points-at HEAD | releases)
-          latest=$(git tag --sort=-v:refname | releases | sed -n 1p)
-          if [ -z "$tagged" ] && [ -n "$latest" ] && [ "$BUMP" != minor ]; then
-            # Everything that ends up in the archives, or decides how it is built.
-            changed=$(git diff --name-only "$latest" HEAD -- \
-              '*.go' go.mod go.sum Makefile LICENSE NOTICE THIRD_PARTY_NOTICES.txt ':(exclude)*_test.go')
-            if [ -z "$changed" ]; then
-              echo "Nothing in the download changed since $latest: nothing to release."
-              exit 0
-            fi
+          version=$(scripts/release-version.sh HEAD "$BUMP")
+          if [ -z "$version" ]; then
+            echo "Nothing to release."
+            exit 0
           fi
           echo "release=true" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v7
         if: steps.changes.outputs.release == 'true'
@@ -93,28 +86,13 @@ jobs:
         if: steps.changes.outputs.release == 'true'
         id: version
         env:
-          BUMP: ${{ steps.pr.outputs.bump }}
+          VERSION: ${{ steps.changes.outputs.version }}
         run: |
-          releases() { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; }
-          # A re-run of this job keeps the tag it already gave this commit.
-          version=$(git tag --points-at HEAD --sort=-v:refname | releases | sed -n 1p)
-          if [ -z "$version" ]; then
-            latest=$(git tag --sort=-v:refname | releases | sed -n 1p)
-            if [ -z "$latest" ]; then
-              version=v0.1.0
-            else
-              IFS=. read -r major minor patch <<<"${latest#v}"
-              if [ "$BUMP" = minor ]; then
-                version="v$major.$((minor + 1)).0"
-              else
-                version="v$major.$minor.$((patch + 1))"
-              fi
-            fi
-            # Local only, so the build is stamped; publishing creates it on GitHub.
-            git tag "$version"
-          fi
-          echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "Releasing $version"
+          # Local only, so the build is stamped; publishing creates it on GitHub.
+          # A re-run of this job finds the commit already tagged.
+          [ -n "$(git tag --list "$VERSION" --points-at HEAD)" ] || git tag "$VERSION"
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
 
       - name: Build
         if: steps.changes.outputs.release == 'true'
