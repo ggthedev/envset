@@ -14,7 +14,7 @@ VERSION := $(if $(TAG),$(TAG)$(DIRTY))
 
 GOBUILD = CGO_ENABLED=0 go build -trimpath -ldflags "-X $(PKG)/pkg/version.Version=$(VERSION)"
 
-.PHONY: help build clear
+.PHONY: help build release clear
 
 help: ## Show this help
 	@awk -F ':.*## ' '/^[a-z]+:.*## /{printf "  make %-8s %s\n", $$1, $$2}' Makefile
@@ -30,6 +30,9 @@ else
 	@$(OUT)/envset version
 endif
 
-clear: ## Delete the binaries in output/
+release: ## Build the newest release tag and link ~/.local/bin/envset to it
+	@scripts/install-release.sh
+
+clear: ## Delete the development binaries in output/
 	rm -f $(OUT)/envset $(OUT)/envset-*
-	@echo "Binaries deleted. A link to $(OUT)/envset stays broken until the next 'make build'."
+	@echo "Binaries deleted; releases are kept. A link to $(OUT)/envset is broken until the next 'make build'."

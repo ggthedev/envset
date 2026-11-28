@@ -50,7 +50,21 @@ included (run `make` on its own to list the targets):
 ```bash
 make build            # output/envset
 make build MACS=1     # output/envset-darwin-amd64 and -arm64, for another Mac
-make clear            # delete the binaries in output/
+make release          # build the newest release tag and link to it
+make clear            # delete the development binaries in output/
+```
+
+For daily use, `make release` fetches the tags, builds the newest `vX.Y.Z` one
+in a temporary git worktree and points `~/.local/bin/envset` at it (set
+`BIN_DIR` for another folder). Your checkout and uncommitted changes are left
+alone, each release is kept in `output/releases/<tag>/`, and a real file called
+`envset` in that folder is never replaced.
+
+The link then stays on that release: `make build` no longer changes what
+`envset` runs. To go back to your own build:
+
+```bash
+ln -sfn "$PWD/output/envset" ~/.local/bin/envset
 ```
 
 A link to `output/envset` is broken after `make clear` until the next build.
