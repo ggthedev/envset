@@ -9,7 +9,24 @@ go build ./... && go vet ./... && go test ./...
 ```
 
 The tests never touch your real files. Backups go to a temp directory, and
-`launchctl` is replaced by a fake.
+`launchctl` is replaced by a fake. Some tests start real zsh, bash and fish
+with a temporary `HOME`; a shell that isn't installed is skipped.
+
+One test uses the real `launchctl`, so it sets (and then unsets) a variable in
+your login session, and runs only when asked:
+
+```bash
+ENVSET_TEST_LAUNCHD=1 go test -count=1 -run TestRealLaunchd -v ./cmd
+```
+
+### On GitHub
+
+`.github/workflows/test.yml` runs on every pull request into `main`, and again
+when the pull request gets new commits, on Apple Silicon (macOS 15 and 26) and
+Intel (macOS 15) runners. It runs the checks above with the race detector and
+the real `launchctl` test, then builds the binary and checks its architecture.
+A missing shell fails the run there instead of being skipped
+(`ENVSET_TEST_REQUIRE_SHELLS=1`).
 
 ## Building
 
