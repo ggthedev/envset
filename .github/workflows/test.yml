@@ -1,0 +1,79 @@
+# Builds and tests envset on real Macs, Apple Silicon and Intel, before changes
+# reach main. Releases are made by release.yml.
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push makes the older run pointless.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: ${{ matrix.runner }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false # a failure on one Mac should not hide the others
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-26, arch: arm64 }
+          - { runner: macos-15-intel, arch: amd64 }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # tags, for the version stamp
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Check the machine
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          sw_vers
+          uname -m
+          [ "$(go env GOHOSTARCH)" = "$ARCH" ]
+
+      - name: Install the shells under test
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          command -v fish >/dev/null || brew install fish
+          for shell in zsh bash fish; do
+            command -v "$shell"
+            "$shell" --version | head -n 1
+          done
+
+      - name: Build and vet
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Test
+        env:
+          ENVSET_TEST_LAUNCHD: "1" # this Mac is thrown away afterwards
+          ENVSET_TEST_REQUIRE_SHELLS: "1"
+        run: go test -race -count=1 ./...
+
+      - name: Check the built binary
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          make build
+          file output/envset
+          output/envset version
+          [[ $(output/envset version) == *"darwin/$ARCH"* ]]
